@@ -1,0 +1,17 @@
+name: warehouse-system
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+      - "5173:5173"
+    volumes:
+      - ./server:/app/server
+      - ./client:/app/client
+      - "./20260210 料架QRcode.xlsx:/app/server/data.xlsx"
+      - /app/client/node_modules
+      - /app/server/node_modules
+    environment:
+      - PORT=3000
+    command: sh -c "cd /app/server && npm start & cd /app/client && npm run dev"

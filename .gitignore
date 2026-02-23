@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.DS_Store
+warehouse.db
+20260210 *.xlsx
+*.log
+.node_path

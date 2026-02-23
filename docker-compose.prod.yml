@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  app:
+    image: wms-app-prod
+    container_name: wms-production
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./warehouse.db:/app/server/warehouse.db
+      - ./uploads:/app/server/uploads
+      # Removed code mounts to use built image
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+    command: npm start
