@@ -412,6 +412,22 @@ app.post('/api/items', (req, res) => {
   }
 });
 
+// 5.1 Update Item Safe Stock
+app.patch('/api/items/:barcode/safe-stock', (req, res) => {
+  const { barcode } = req.params;
+  const { safe_stock } = req.body;
+  try {
+    const stmt = db.prepare('UPDATE items SET safe_stock = ? WHERE barcode = ?');
+    const info = stmt.run(safe_stock || 0, barcode);
+    if (info.changes === 0) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // 6. Get Full Inventory Report (For Reports Page)
 app.get('/api/reports/inventory', (req, res) => {
   try {

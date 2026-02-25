@@ -240,7 +240,7 @@ const Operations = () => {
     };
 
     return (
-        <div className={clsx("mx-auto space-y-8 transition-all duration-300", mode === 'NO_STICKER_IN' ? "max-w-5xl" : "max-w-3xl")}>
+        <div className="space-y-8 transition-all duration-300 w-full">
             <header className="text-center">
                 <h2 className="text-3xl font-bold text-white mb-2">出入庫作業</h2>
                 <div className="flex justify-center gap-4 bg-gray-800 p-1 rounded-lg inline-flex">

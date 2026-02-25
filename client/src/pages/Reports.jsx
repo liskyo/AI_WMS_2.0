@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { getInventoryReport, deleteItem, getBom } from '../api';
+import { getInventoryReport, deleteItem, getBom, updateSafeStock } from '../api';
 import * as XLSX from 'xlsx';
 import { Download, Layers, MapPin, Trash2, X, AlertTriangle, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -224,7 +224,7 @@ const Reports = () => {
                                             <th className="p-4">規格</th>
                                             <th className="p-4 text-right">數量</th>
                                             <th className="p-4 text-right">安全庫存</th>
-                                            <th className="p-4 w-1/2">儲位分佈</th>
+                                            <th className="p-4">儲位分佈</th>
                                         </>
                                     ) : activeTab === 'bom' ? (
                                         <>
@@ -233,13 +233,13 @@ const Reports = () => {
                                             <th className="p-4">組成用量</th>
                                             <th className="p-4 text-right">剩餘庫存</th>
                                             <th className="p-4 text-right">安全庫存</th>
-                                            <th className="p-4 w-1/3">所在儲位</th>
+                                            <th className="p-4">所在儲位</th>
                                         </>
                                     ) : (
                                         <>
                                             <th className="p-4 pl-6">儲位代碼</th>
                                             <th className="p-4 text-right">數量</th>
-                                            <th className="p-4 w-2/3">存放料件明細</th>
+                                            <th className="p-4">存放料件明細</th>
                                         </>
                                     )}
                                 </tr>
@@ -263,9 +263,20 @@ const Reports = () => {
                                                 </span>
                                             </td>
                                             <td className="p-4 text-right pr-6">
-                                                <span className="px-3 py-1 rounded-lg font-bold bg-red-600/20 text-red-400">
-                                                    {item.safe_stock || 0}
-                                                </span>
+                                                <input
+                                                    type="number"
+                                                    value={item.safe_stock}
+                                                    onChange={(e) => {
+                                                        const val = parseInt(e.target.value) || 0;
+                                                        setData(prev => prev.map(d => d.barcode === item.barcode ? { ...d, safe_stock: val } : d));
+                                                    }}
+                                                    onBlur={(e) => {
+                                                        const val = parseInt(e.target.value) || 0;
+                                                        updateSafeStock(item.barcode, val).catch(() => alert('更新安全庫存失敗'));
+                                                    }}
+                                                    className="w-20 px-2 py-1 bg-red-600/20 text-red-500 font-bold text-center rounded-lg border border-red-500/30 focus:outline-none focus:ring-2 focus:ring-red-500 transition-all cursor-pointer hover:bg-red-500/20"
+                                                    min="0"
+                                                />
                                             </td>
                                             <td className="p-4 text-gray-400 text-sm flex justify-between items-center group">
                                                 <div className="flex flex-wrap gap-2">

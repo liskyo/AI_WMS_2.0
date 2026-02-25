@@ -9,6 +9,7 @@ export const getItems = (q) => api.get('/items', { params: { q } });
 export const getItemDetails = (barcode) => api.get(`/items/${barcode}`);
 export const submitTransaction = (data, token) => api.post('/transaction', data, { headers: { Authorization: `Bearer ${token}` } });
 export const createItem = (data) => api.post('/items', data);
+export const updateSafeStock = (barcode, safe_stock) => api.patch(`/items/${barcode}/safe-stock`, { safe_stock });
 export const getInventoryReport = () => api.get('/reports/inventory');
 
 // Admin APIs

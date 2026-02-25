@@ -95,7 +95,7 @@ const TransactionHistory = () => {
     const canDelete = user?.group_name === '管理者' || (user?.permissions && user.permissions.includes('ALL'));
 
     return (
-        <div className="max-w-7xl mx-auto space-y-6">
+        <div className="space-y-6">
             <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                     <h2 className="text-3xl font-bold text-white mb-2">出入庫紀錄</h2>
