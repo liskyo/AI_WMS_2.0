@@ -89,6 +89,7 @@ const Inventory = () => {
                                     <th className="p-4">規格</th>
                                     <th className="p-4">儲位分佈</th>
                                     <th className="p-4 text-right pr-6">總庫存量</th>
+                                    <th className="p-4 text-right pr-6">安全庫存</th>
                                 </>
                             ) : (
                                 <>
@@ -97,6 +98,7 @@ const Inventory = () => {
                                     <th className="p-4">組成用量</th>
                                     <th className="p-4">儲位分佈</th>
                                     <th className="p-4 text-right pr-6">剩餘庫存</th>
+                                    <th className="p-4 text-right pr-6">安全庫存</th>
                                 </>
                             )}
                         </tr>
@@ -139,8 +141,13 @@ const Inventory = () => {
                                             </div>
                                         </td>
                                         <td className="p-4 text-right pr-6">
-                                            <span className={`px-3 py-1 rounded-lg font-bold ${item.total_quantity > 0 ? 'bg-green-600/20 text-green-400' : 'bg-gray-700 text-gray-500'}`}>
+                                            <span className={`px-3 py-1 rounded-lg font-bold bg-green-600/20 text-green-400`}>
                                                 {item.total_quantity}
+                                            </span>
+                                        </td>
+                                        <td className="p-4 text-right pr-6">
+                                            <span className="px-3 py-1 rounded-lg font-bold bg-red-600/20 text-red-400">
+                                                {item.safe_stock || 0}
                                             </span>
                                         </td>
                                     </motion.tr>
@@ -193,6 +200,11 @@ const Inventory = () => {
                                             <td className="p-4 text-right pr-6">
                                                 <span className={`px-3 py-1 rounded-lg font-bold ${comp.current_stock < comp.required_qty ? 'bg-red-500/20 text-red-400' : 'bg-green-600/20 text-green-400'}`}>
                                                     {comp.current_stock}
+                                                </span>
+                                            </td>
+                                            <td className="p-4 text-right pr-6">
+                                                <span className="px-3 py-1 rounded-lg font-bold bg-red-600/20 text-red-400">
+                                                    {comp.safe_stock || 0}
                                                 </span>
                                             </td>
                                         </motion.tr>

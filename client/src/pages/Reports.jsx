@@ -77,6 +77,7 @@ const Reports = () => {
                 description: curr.description || '',
                 unit: curr.unit || '',
                 category: curr.category || '',
+                safe_stock: curr.safe_stock || 0,
                 totalQty: curr.quantity,
                 locations: locStr ? [locStr] : []
             });
@@ -112,7 +113,8 @@ const Reports = () => {
                 "庫存單位": i.unit,
                 "庫別名稱": i.category,
                 "儲位代碼": i.locations.join('\n'), // Spread across newlines or commas
-                "數量": i.totalQty
+                "數量": i.totalQty,
+                "安全庫存": i.safe_stock || 0
             }));
             const ws1 = XLSX.utils.json_to_sheet(ws1Data);
             XLSX.utils.book_append_sheet(wb, ws1, "料件總表");
@@ -132,6 +134,7 @@ const Reports = () => {
                         "屬性": "廠內",
                         "組成用量": comp.required_qty,
                         "當前庫存量": comp.current_stock,
+                        "安全庫存": comp.safe_stock || 0,
                         "儲位": comp.locations || ''
                     });
                 });
@@ -220,6 +223,7 @@ const Reports = () => {
                                             <th className="p-4">品名</th>
                                             <th className="p-4">規格</th>
                                             <th className="p-4 text-right">數量</th>
+                                            <th className="p-4 text-right">安全庫存</th>
                                             <th className="p-4 w-1/2">儲位分佈</th>
                                         </>
                                     ) : activeTab === 'bom' ? (
@@ -228,7 +232,8 @@ const Reports = () => {
                                             <th className="p-4">元件品號</th>
                                             <th className="p-4">組成用量</th>
                                             <th className="p-4 text-right">剩餘庫存</th>
-                                            <th className="p-4">所在儲位</th>
+                                            <th className="p-4 text-right">安全庫存</th>
+                                            <th className="p-4 w-1/3">所在儲位</th>
                                         </>
                                     ) : (
                                         <>
@@ -253,6 +258,7 @@ const Reports = () => {
                                             <td className="p-4 font-bold text-white">{item.name}</td>
                                             <td className="p-4 text-gray-400 text-sm">{item.description}</td>
                                             <td className="p-4 text-right font-bold text-green-400 text-lg">{item.totalQty}</td>
+                                            <td className="p-4 text-right font-bold text-gray-300">{item.safe_stock}</td>
                                             <td className="p-4 text-gray-400 text-sm flex justify-between items-center group">
                                                 <div className="flex flex-wrap gap-2">
                                                     {item.locations.map((loc, i) => {
@@ -305,7 +311,28 @@ const Reports = () => {
                                                         {comp.current_stock}
                                                     </span>
                                                 </td>
-                                                <td className="p-4 text-gray-400 text-sm">{comp.locations || '無庫存'}</td>
+                                                <td className="p-4 text-right font-bold text-gray-300">{comp.safe_stock || 0}</td>
+                                                <td className="p-4">
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {comp.locations ? comp.locations.split(',').map((loc, i) => {
+                                                            const match = loc.trim().match(/(.+?)\s*\((.+?)\)/) || loc.trim().match(/(.+?):(.+?)/);
+                                                            const code = match ? match[1] : loc.trim();
+                                                            const qty = match ? match[2] : null;
+                                                            return (
+                                                                <span key={i} className="bg-gray-800/80 border border-gray-600 px-2 py-1 rounded text-xs flex items-center shrink-0">
+                                                                    {qty !== null ? (
+                                                                        <>
+                                                                            <span className="text-blue-300">{code}</span>
+                                                                            <span className="text-yellow-500 font-bold ml-[2px]">({qty})</span>
+                                                                        </>
+                                                                    ) : (
+                                                                        <span className="text-blue-300">{code}</span>
+                                                                    )}
+                                                                </span>
+                                                            );
+                                                        }) : <span className="text-gray-600 text-sm">無庫存</span>}
+                                                    </div>
+                                                </td>
                                             </motion.tr>
                                         ))
                                     )

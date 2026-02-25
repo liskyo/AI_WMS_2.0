@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Package, AlertCircle, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { getLocations, getItems, getItemDetails, getBom } from '../api';
+import * as XLSX from 'xlsx';
 
 const Dashboard = () => {
     const [stats, setStats] = useState({
@@ -11,6 +12,7 @@ const Dashboard = () => {
         emptyCells: 0,
         lowStock: 0
     });
+    const [lowStockItems, setLowStockItems] = useState([]);
 
     // Search State
     const [searchQuery, setSearchQuery] = useState('');
@@ -24,8 +26,9 @@ const Dashboard = () => {
 
     const fetchStats = async () => {
         try {
-            const locRes = await getLocations();
+            const [locRes, itemsRes] = await Promise.all([getLocations(), getItems()]);
             const locations = Array.isArray(locRes.data) ? locRes.data : [];
+            const items = Array.isArray(itemsRes.data) ? itemsRes.data : [];
 
             // Extract real storage locations (ignore labels, paths, pillars, gates)
             const storageLocations = locations.filter(l => {
@@ -38,12 +41,15 @@ const Dashboard = () => {
             const empty = storageLocations.length - occupied;
             const totalStock = locations.reduce((acc, curr) => acc + (curr.total_quantity || 0), 0);
 
-            // Mock low stock for now (or fetch items to check specific thresholds)
+            // Compute low stock items
+            const lowStockList = items.filter(item => item.total_quantity < (item.safe_stock || 0));
+            setLowStockItems(lowStockList);
+
             setStats({
                 totalStock,
                 occupiedCells: occupied,
                 emptyCells: empty,
-                lowStock: 0
+                lowStock: lowStockList.length
             });
         } catch (err) {
             console.error(err);
@@ -115,6 +121,23 @@ const Dashboard = () => {
         }
     };
 
+    const exportPurchaseList = () => {
+        if (lowStockItems.length === 0) return;
+        const data = lowStockItems.map(item => ({
+            "料件條碼": item.barcode,
+            "品名": item.name,
+            "規格": item.description || '',
+            "庫存單位": item.unit || '',
+            "總庫存量": item.total_quantity,
+            "安全庫存": item.safe_stock || 0,
+            "建議採購量": Math.max(0, (item.safe_stock || 0) - item.total_quantity)
+        }));
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(data);
+        XLSX.utils.book_append_sheet(wb, ws, "建議採購清單");
+        XLSX.writeFile(wb, "建議採購清單.xlsx");
+    };
+
     return (
         <div className="space-y-6">
             <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -142,6 +165,27 @@ const Dashboard = () => {
                     )}
                 </div>
             </header>
+
+            {/* Low Stock Alert Section */}
+            {lowStockItems.length > 0 && (
+                <div className="bg-red-500/10 border border-red-500 rounded-xl p-6 shadow-lg shadow-red-500/5">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                        <div className="flex items-center gap-3">
+                            <AlertCircle className="text-red-500 shrink-0" size={28} />
+                            <div>
+                                <h3 className="text-xl font-bold text-red-500">安全庫存警示</h3>
+                                <p className="text-red-400 mt-1">系統偵測到 {lowStockItems.length} 項料件的總庫存低於設定的安全庫存量，請及早備料。</p>
+                            </div>
+                        </div>
+                        <button
+                            onClick={exportPurchaseList}
+                            className="bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-lg font-bold transition-colors shadow shrink-0 whitespace-nowrap"
+                        >
+                            匯出建議採購清單
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {/* Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-6">

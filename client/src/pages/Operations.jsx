@@ -5,18 +5,42 @@ import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const Operations = () => {
-    const [mode, setMode] = useState('IN'); // IN or OUT
+    const [mode, setMode] = useState(() => {
+        return sessionStorage.getItem('wms_ops_mode') || 'IN';
+    }); // IN or OUT or BOM_OUT
     const [barcode, setBarcode] = useState('');
     const [locationCode, setLocationCode] = useState('');
     const [quantity, setQuantity] = useState('');
     const [itemInfo, setItemInfo] = useState(null);
-    const [bomInfo, setBomInfo] = useState(null); // For BOM Outbound setup
-    const [bomOutData, setBomOutData] = useState({
-        isActive: false,
-        mainBarcode: '',
-        sets: 1,
-        components: [] // { component_barcode, required_total, picked_total, current_stock }
+    const [bomInfo, setBomInfo] = useState(() => {
+        const saved = sessionStorage.getItem('wms_ops_bomInfo');
+        return saved ? JSON.parse(saved) : null;
+    }); // For BOM Outbound setup
+    const [bomOutData, setBomOutData] = useState(() => {
+        const saved = sessionStorage.getItem('wms_ops_bomOutData');
+        return saved ? JSON.parse(saved) : {
+            isActive: false,
+            mainBarcode: '',
+            sets: 1,
+            components: [] // { component_barcode, required_total, picked_total, current_stock }
+        };
     });
+
+    useEffect(() => {
+        sessionStorage.setItem('wms_ops_mode', mode);
+    }, [mode]);
+
+    useEffect(() => {
+        if (bomInfo) {
+            sessionStorage.setItem('wms_ops_bomInfo', JSON.stringify(bomInfo));
+        } else {
+            sessionStorage.removeItem('wms_ops_bomInfo');
+        }
+    }, [bomInfo]);
+
+    useEffect(() => {
+        sessionStorage.setItem('wms_ops_bomOutData', JSON.stringify(bomOutData));
+    }, [bomOutData]);
 
     useEffect(() => {
         if (mode === 'BOM_OUT' && bomOutData.isActive && barcode) {
@@ -108,14 +132,16 @@ const Operations = () => {
 
                 setMessage({ type: 'success', text: `已暫存元件! (${bcode})` });
             } else {
-                // Standard IN/OUT
+                // Standard IN/OUT or NO_STICKER_IN
+                // Map NO_STICKER_IN to standard IN for the backend API
+                const apiMode = mode === 'NO_STICKER_IN' ? 'IN' : mode;
                 const res = await submitTransaction({
-                    type: mode,
+                    type: apiMode,
                     barcode: barcode.trim(),
                     location_code: locationCode.trim(),
                     quantity: parseFloat(quantity)
                 }, token);
-                setMessage({ type: 'success', text: `成功出庫! 最新數量: ${res.data.newQty}` });
+                setMessage({ type: 'success', text: `成功入庫! 最新數量: ${res.data.newQty}` });
             }
 
             setBarcode('');
@@ -207,8 +233,14 @@ const Operations = () => {
         }
     };
 
+    const handlePrintSticker = () => {
+        if (!itemInfo) return;
+        window.print();
+        setMessage({ type: 'success', text: '貼紙列印對話框已開啟' });
+    };
+
     return (
-        <div className="max-w-3xl mx-auto space-y-8">
+        <div className={clsx("mx-auto space-y-8 transition-all duration-300", mode === 'NO_STICKER_IN' ? "max-w-5xl" : "max-w-3xl")}>
             <header className="text-center">
                 <h2 className="text-3xl font-bold text-white mb-2">出入庫作業</h2>
                 <div className="flex justify-center gap-4 bg-gray-800 p-1 rounded-lg inline-flex">
@@ -220,6 +252,15 @@ const Operations = () => {
                         )}
                     >
                         <ArrowDownToLine size={18} /> 入庫 (Inbound)
+                    </button>
+                    <button
+                        onClick={() => { setMode('NO_STICKER_IN'); setBarcode(''); }}
+                        className={clsx(
+                            "px-6 py-2 rounded-md font-bold transition-all flex items-center gap-2",
+                            mode === 'NO_STICKER_IN' ? "bg-teal-600 text-white shadow-lg" : "text-gray-400 hover:text-white"
+                        )}
+                    >
+                        <ArrowDownToLine size={18} /> 無貼紙入庫 (No-Sticker IN)
                     </button>
                     <button
                         onClick={() => { setMode('OUT'); setBarcode(''); }}
@@ -242,12 +283,12 @@ const Operations = () => {
                 </div>
             </header>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className={clsx("grid gap-8 transition-all", mode === 'NO_STICKER_IN' ? "grid-cols-1 lg:grid-cols-12" : "grid-cols-1 md:grid-cols-2")}>
                 {/* Form */}
                 <motion.div
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
-                    className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-2xl"
+                    className={clsx("bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-2xl", mode === 'NO_STICKER_IN' ? "lg:col-span-5" : "")}
                 >
                     <form onSubmit={handleSubmit} className="space-y-6">
                         {mode === 'BOM_OUT' && !bomOutData.isActive ? (
@@ -326,6 +367,11 @@ const Operations = () => {
                                             required
                                         />
                                     </div>
+                                    {mode !== 'BOM_OUT' && barcode && !itemInfo && !loading && (
+                                        <p className="mt-2 text-sm text-red-400 font-bold bg-red-500/10 p-2 rounded border border-red-500/20">
+                                            ⚠️ 總表內無此料件，無法作業！
+                                        </p>
+                                    )}
                                 </div>
 
                                 <div>
@@ -341,6 +387,7 @@ const Operations = () => {
                                             value={locationCode}
                                             onChange={(e) => setLocationCode(e.target.value)}
                                             required
+                                            disabled={mode !== 'BOM_OUT' && !itemInfo}
                                         />
                                     </div>
                                 </div>
@@ -358,22 +405,25 @@ const Operations = () => {
                                         min="0.001"
                                         step="any"
                                         required
+                                        disabled={mode !== 'BOM_OUT' && !itemInfo}
                                     />
                                 </div>
 
                                 <button
                                     type="submit"
-                                    disabled={loading}
+                                    disabled={loading || (mode !== 'BOM_OUT' && !itemInfo)}
                                     className={clsx(
                                         "w-full py-4 rounded-xl font-bold text-lg shadow-lg transform transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed",
                                         mode === 'IN'
                                             ? "bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white"
-                                            : mode === 'OUT'
-                                                ? "bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-500 hover:to-orange-400 text-white"
-                                                : "bg-gradient-to-r from-yellow-600 to-yellow-500 hover:from-yellow-500 hover:to-yellow-400 text-white"
+                                            : mode === 'NO_STICKER_IN'
+                                                ? "bg-gradient-to-r from-teal-600 to-teal-500 hover:from-teal-500 hover:to-teal-400 text-white"
+                                                : mode === 'OUT'
+                                                    ? "bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-500 hover:to-orange-400 text-white"
+                                                    : "bg-gradient-to-r from-yellow-600 to-yellow-500 hover:from-yellow-500 hover:to-yellow-400 text-white"
                                     )}
                                 >
-                                    {loading ? '處理中...' : (mode === 'IN' ? '確認入庫' : mode === 'OUT' ? '確認出庫' : '確認元件出庫')}
+                                    {loading ? '處理中...' : (mode === 'IN' ? '確認入庫' : mode === 'NO_STICKER_IN' ? '確認入庫 (無貼紙)' : mode === 'OUT' ? '確認出庫' : '確認元件出庫')}
                                 </button>
                             </>
                         )}
@@ -398,7 +448,7 @@ const Operations = () => {
                 </motion.div>
 
                 {/* Info Panel */}
-                <div className="space-y-6">
+                <div className={clsx("space-y-6", mode === 'NO_STICKER_IN' ? "lg:col-span-7 grid grid-cols-1 md:grid-cols-2 md:gap-6 md:space-y-0" : "")}>
                     <motion.div
                         initial={{ opacity: 0, x: 20 }}
                         animate={{ opacity: 1, x: 0 }}
@@ -408,6 +458,7 @@ const Operations = () => {
                             {mode === 'BOM_OUT' ? <Layers className="text-yellow-400" /> : <Package className="text-blue-400" />}
                             {mode === 'BOM_OUT' ? '主件資訊' : '料件資訊'}
                         </h3>
+
 
                         {mode === 'BOM_OUT' ? (
                             bomOutData.isActive ? (
@@ -523,6 +574,61 @@ const Operations = () => {
                             </div>
                         )}
                     </motion.div>
+
+                    {/* Sticker Info Panel (Only visible in NO_STICKER_IN mode with valid itemInfo) */}
+                    {mode === 'NO_STICKER_IN' && itemInfo && (
+                        <motion.div
+                            initial={{ opacity: 0, x: 20 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            className="bg-gray-800 p-6 rounded-2xl border border-gray-700 h-full flex flex-col print-sticker-container"
+                        >
+                            <h3 className="text-xl font-semibold text-white mb-4 flex items-center gap-2 no-print">
+                                <Package className="text-teal-400" />
+                                貼紙資訊
+                            </h3>
+
+                            <div className="space-y-4 flex-grow bg-gray-900 border border-gray-600 p-5 rounded-xl font-mono text-sm shadow-inner printable-sticker">
+                                <div className="border-b border-gray-700 pb-2">
+                                    <span className="text-gray-500 inline-block w-24">元件品號:</span>
+                                    <span className="text-white font-bold text-lg">{barcode}</span>
+                                </div>
+                                <div className="border-b border-gray-700 pb-2">
+                                    <span className="text-gray-500 block mb-2">料件條碼:</span>
+                                    <div className="bg-white p-2 rounded flex justify-center">
+                                        <img
+                                            src={`https://bwipjs-api.metafloor.com/?bcid=code128&text=${encodeURIComponent(itemInfo.item.barcode)}&scale=2&height=10&includetext=true`}
+                                            alt={itemInfo.item.barcode}
+                                            className="h-16 object-contain"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="border-b border-gray-700 pb-2">
+                                    <span className="text-gray-500 inline-block w-24">品名:</span>
+                                    <span className="text-white font-medium text-lg">{itemInfo.item.name}</span>
+                                </div>
+                                <div className="border-b border-gray-700 pb-2">
+                                    <span className="text-gray-500 inline-block w-24">數量:</span>
+                                    <span className="text-yellow-400 font-bold text-2xl">{quantity || 0}</span>
+                                </div>
+                                <div>
+                                    <span className="text-gray-500 inline-block w-24">入庫日期:</span>
+                                    <span className="text-gray-300 font-bold text-lg">{new Date().toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-')}</span>
+                                </div>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={handlePrintSticker}
+                                className="mt-6 w-full py-3 rounded-xl font-bold bg-teal-700 hover:bg-teal-600 text-white border border-teal-500 transition-colors flex items-center justify-center gap-2 shadow-lg no-print"
+                            >
+                                <ArrowUpFromLine size={20} className="rotate-180" />
+                                <span className="flex items-center gap-2">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
+                                    列印貼紙資訊 (列印/PDF)
+                                </span>
+                            </button>
+                        </motion.div>
+                    )}
                 </div>
             </div>
         </div>

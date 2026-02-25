@@ -9,3 +9,57 @@
 body {
   @apply bg-gray-900 text-white;
 }
+
+@media print {
+  /* Hide everything by default */
+  body * {
+    visibility: hidden;
+  }
+
+  /* Only show the sticker container and its children */
+  .printable-sticker, .printable-sticker * {
+    visibility: visible;
+  }
+
+  /* Reset layout for the sticker */
+  .print-sticker-container {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: none;
+    box-shadow: none;
+    background: none;
+  }
+
+  /* Expand the sticker for printing */
+  .printable-sticker {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: 400px; /* Suitable label size */
+    margin: 0;
+    padding: 20px;
+    border: 2px solid #000 !important;
+    background-color: white !important;
+    color: black !important;
+  }
+
+  /* Ensure text colors are black in print */
+  .printable-sticker span {
+    color: black !important;
+  }
+
+  /* Hide specific borders or backgrounds if necessary, make them suitable for B&W printing */
+  .printable-sticker .border-b {
+    border-color: #333 !important;
+  }
+
+  /* Hide anything explicitly marked no-print */
+  .no-print {
+    display: none !important;
+  }
+}

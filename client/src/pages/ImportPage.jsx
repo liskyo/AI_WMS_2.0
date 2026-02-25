@@ -54,7 +54,8 @@ const ImportPage = () => {
                     name: row['品名'] || row['name'],
                     description: row['規格'] || row['description'],
                     unit: row['庫存單位'] || row['unit'],
-                    category: row['庫別名稱'] || row['category']
+                    category: row['庫別名稱'] || row['category'],
+                    safe_stock: row['安全庫存'] !== undefined ? row['安全庫存'] : (row['safe_stock'] || 0)
                 })).filter(i => i.barcode && i.name);
 
                 res = await importItems(formatted, token);
@@ -121,7 +122,7 @@ const ImportPage = () => {
         let name = '';
 
         if (activeTab === 'items') {
-            data = [{ "元件品號": "A001", "品名": "測試商品", "規格": "備註/包裝規格", "庫存單位": "個", "庫別名稱": "電子區" }];
+            data = [{ "元件品號": "A001", "品名": "測試商品", "規格": "備註/包裝規格", "庫存單位": "個", "庫別名稱": "電子區", "安全庫存": 10 }];
             name = "料件匯入範本.xlsx";
         } else if (activeTab === 'bom') {
             data = [{ "主件品號": "M001", "元件品號": "A001", "品名": "可選(不匯入)", "規格": "可選(不匯入)", "單/複數單位": "單一", "取替代品群組": "Group1", "屬性": "廠內", "組成用量": 2 }];
@@ -289,7 +290,7 @@ const ImportPage = () => {
                                             <>
                                                 <thead className="bg-gray-700 text-gray-200">
                                                     <tr>
-                                                        {Object.keys(previewData[0]).slice(0, 5).map(key => (
+                                                        {Object.keys(previewData[0]).slice(0, 6).map(key => (
                                                             <th key={key} className="p-3">{key}</th>
                                                         ))}
                                                     </tr>
@@ -297,7 +298,7 @@ const ImportPage = () => {
                                                 <tbody>
                                                     {previewData.slice(0, 5).map((row, i) => (
                                                         <tr key={i} className="border-b border-gray-800">
-                                                            {Object.values(row).slice(0, 5).map((val, j) => (
+                                                            {Object.values(row).slice(0, 6).map((val, j) => (
                                                                 <td key={j} className="p-3">{val}</td>
                                                             ))}
                                                         </tr>

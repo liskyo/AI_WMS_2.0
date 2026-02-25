@@ -37,7 +37,8 @@ const initDb = () => {
       name TEXT NOT NULL,
       description TEXT,
       unit TEXT,
-      category TEXT
+      category TEXT,
+      safe_stock INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS inventory (
@@ -133,6 +134,13 @@ const initDb = () => {
     if (!hasUnit) {
       db.prepare('ALTER TABLE items ADD COLUMN unit TEXT').run();
       console.log('Migration: Added unit to items table.');
+    }
+
+    // Migration: Add safe_stock to items if not exists
+    const hasSafeStock = itemsTableInfo.some(col => col.name === 'safe_stock');
+    if (!hasSafeStock) {
+      db.prepare('ALTER TABLE items ADD COLUMN safe_stock INTEGER DEFAULT 0').run();
+      console.log('Migration: Added safe_stock to items table.');
     }
   } catch (err) {
     console.warn('Migration specific error:', err);
@@ -385,18 +393,19 @@ app.post('/api/transaction', (req, res) => {
 
 // 5. Create/Update Item
 app.post('/api/items', (req, res) => {
-  const { barcode, name, description, category, unit } = req.body;
+  const { barcode, name, description, category, unit, safe_stock } = req.body;
   try {
     const stmt = db.prepare(`
-            INSERT INTO items (barcode, name, description, category, unit) 
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO items (barcode, name, description, category, unit, safe_stock) 
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(barcode) DO UPDATE SET
             name = excluded.name,
             description = excluded.description,
             category = excluded.category,
-            unit = excluded.unit
+            unit = excluded.unit,
+            safe_stock = excluded.safe_stock
         `);
-    stmt.run(barcode, name, description, category, unit);
+    stmt.run(barcode, name, description, category, unit, safe_stock || 0);
     res.json({ success: true });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -413,6 +422,7 @@ app.get('/api/reports/inventory', (req, res) => {
                     i.description,
                     i.unit,
                     i.category,
+                    i.safe_stock,
                     l.code as location_code, 
                     IFNULL(inv.quantity, 0) as quantity
                 FROM items i
@@ -751,13 +761,14 @@ app.post('/api/admin/import/items', requireAdmin, (req, res) => {
 
       // 2. Insert or update the new items
       const insert = db.prepare(`
-            INSERT INTO items (barcode, name, category, description, unit) 
-            VALUES (@barcode, @name, @category, @description, @unit)
+            INSERT INTO items (barcode, name, category, description, unit, safe_stock) 
+            VALUES (@barcode, @name, @category, @description, @unit, @safe_stock)
             ON CONFLICT(barcode) DO UPDATE SET
             name = excluded.name,
             category = excluded.category,
             description = excluded.description,
-            unit = excluded.unit
+            unit = excluded.unit,
+            safe_stock = excluded.safe_stock
         `);
 
       for (const item of data) {
@@ -766,7 +777,8 @@ app.post('/api/admin/import/items', requireAdmin, (req, res) => {
           name: item.name,
           category: item.category || null,
           description: item.description || null,
-          unit: item.unit || null
+          unit: item.unit || null,
+          safe_stock: item.safe_stock || 0
         });
       }
 
@@ -933,6 +945,7 @@ app.get('/api/bom', (req, res) => {
           b.required_qty, 
           i.name as component_name,
           i.description,
+          i.safe_stock,
           (SELECT IFNULL(SUM(quantity), 0) FROM inventory WHERE item_id = i.id) as current_stock,
           (
              SELECT GROUP_CONCAT(l.code || ':' || loc_stock.qty)
