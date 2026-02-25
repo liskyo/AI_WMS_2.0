@@ -1,5 +1,5 @@
 import { Link, useLocation, Outlet } from 'react-router-dom';
-import { LayoutDashboard, ArrowRightLeft, Package, User, FileBarChart, Settings, Shield, LogOut, History } from 'lucide-react';
+import { LayoutDashboard, ArrowRightLeft, Package, User, FileBarChart, Settings, Shield, LogOut, History, Smartphone } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import clsx from 'clsx';
 
@@ -70,6 +70,13 @@ const Layout = () => {
                             <p className="text-xs text-gray-500 truncate">{user?.group_name || 'Staff'}</p>
                         </div>
                     </div>
+                    <Link
+                        to="/mobile"
+                        className="w-full flex items-center gap-2 text-teal-400 font-bold hover:text-white bg-teal-500/10 p-3 rounded-lg transition-colors hover:bg-teal-500/30 mb-2 shadow-sm border border-teal-500/20"
+                    >
+                        <Smartphone size={18} />
+                        <span className="text-sm flex-1 text-center pr-2">切換至手機掃描模式</span>
+                    </Link>
                     <button
                         onClick={logout}
                         className="w-full flex items-center justify-center gap-2 text-gray-400 hover:text-red-400 p-2 rounded-lg transition-colors hover:bg-red-500/10"
