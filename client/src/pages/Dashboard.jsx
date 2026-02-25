@@ -222,17 +222,17 @@ const Dashboard = () => {
                         </div>
                     </div>
                 </Link>
-                <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg">
+                <Link to="/reports?tab=low_stock" className="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg hover:border-red-500 transition-colors cursor-pointer group">
                     <div className="flex items-center gap-4">
-                        <div className="p-3 bg-red-500/20 rounded-lg text-red-400">
+                        <div className="p-3 bg-red-500/20 rounded-lg text-red-400 group-hover:bg-red-500/30 transition-colors">
                             <AlertCircle size={24} />
                         </div>
                         <div>
-                            <h3 className="text-gray-400 text-sm">低庫存警示</h3>
+                            <h3 className="text-gray-400 text-sm group-hover:text-red-400 transition-colors">低庫存警示</h3>
                             <p className="text-2xl font-bold text-white">{stats.lowStock}</p>
                         </div>
                     </div>
-                </div>
+                </Link>
             </div>
 
             {/* Search Results Summary */}

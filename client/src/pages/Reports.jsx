@@ -10,7 +10,7 @@ const Reports = () => {
     const [bomData, setBomData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchParams] = useSearchParams();
-    const [activeTab, setActiveTab] = useState('item'); // 'item', 'location', or 'bom'
+    const [activeTab, setActiveTab] = useState('item'); // 'item', 'location', 'bom', 'low_stock'
 
     // Delete State
     const [deleteTarget, setDeleteTarget] = useState(null); // { barcode, name }
@@ -43,7 +43,7 @@ const Reports = () => {
     useEffect(() => {
         fetchReport();
         const tab = searchParams.get('tab');
-        if (['item', 'location', 'bom'].includes(tab)) setActiveTab(tab);
+        if (['item', 'location', 'bom', 'low_stock'].includes(tab)) setActiveTab(tab);
     }, [searchParams]);
 
     const fetchReport = async () => {
@@ -84,6 +84,9 @@ const Reports = () => {
         }
         return acc;
     }, []).sort((a, b) => a.barcode.localeCompare(b.barcode, undefined, { numeric: true }));
+
+    // Low Stock Summary
+    const lowStockSummary = itemSummary.filter(i => i.totalQty < i.safe_stock);
 
     // Process Data for Location Summary (Sorted by location code)
     // To match user format ("儲位代碼", "元件品號", "品名", "規格", "庫存單位", "庫別名稱", "數量"), 
@@ -142,6 +145,21 @@ const Reports = () => {
             const wsBom = XLSX.utils.json_to_sheet(wsBomData);
             XLSX.utils.book_append_sheet(wb, wsBom, "主件總表");
             XLSX.writeFile(wb, `庫存報表_主件總表_${dateStr}.xlsx`);
+        } else if (activeTab === 'low_stock') {
+            // Sheet 4: Low Stock Summary
+            const wsLowStockData = lowStockSummary.map(i => ({
+                "元件品號": i.barcode,
+                "品名": i.name,
+                "規格": i.description,
+                "庫存單位": i.unit,
+                "庫別名稱": i.category,
+                "儲位代碼": i.locations.join('\n'),
+                "數量": i.totalQty,
+                "安全庫存": i.safe_stock || 0
+            }));
+            const wsLow = XLSX.utils.json_to_sheet(wsLowStockData);
+            XLSX.utils.book_append_sheet(wb, wsLow, "低於安全庫存總表");
+            XLSX.writeFile(wb, `庫存報表_低於安全庫存_${dateStr}.xlsx`);
         } else {
             // Sheet 2: Location Summary
             const ws2Data = locationSummary.map(l => ({
@@ -207,6 +225,16 @@ const Reports = () => {
                     <Layers size={18} />
                     主件總表
                 </button>
+                <button
+                    onClick={() => setActiveTab('low_stock')}
+                    className={`flex items-center gap-2 px-6 py-3 rounded-t-xl transition-colors ${activeTab === 'low_stock'
+                        ? 'bg-red-600/20 text-red-500 border-b-2 border-red-500'
+                        : 'text-gray-400 hover:text-white hover:bg-gray-800'
+                        }`}
+                >
+                    <AlertTriangle size={18} />
+                    低於安全庫存總表
+                </button>
             </div>
 
             <div className="bg-gray-800 rounded-b-2xl rounded-tr-2xl border border-gray-700 overflow-hidden shadow-2xl min-h-[500px]">
@@ -217,7 +245,7 @@ const Reports = () => {
                         <table className="w-full text-left">
                             <thead className="bg-gray-900/50 text-gray-400 text-sm uppercase">
                                 <tr>
-                                    {activeTab === 'item' ? (
+                                    {activeTab === 'item' || activeTab === 'low_stock' ? (
                                         <>
                                             <th className="p-4 pl-6">元件品號</th>
                                             <th className="p-4">品名</th>
@@ -245,8 +273,8 @@ const Reports = () => {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-800">
-                                {activeTab === 'item' ? (
-                                    itemSummary.map((item, idx) => (
+                                {activeTab === 'item' || activeTab === 'low_stock' ? (
+                                    (activeTab === 'item' ? itemSummary : lowStockSummary).map((item, idx) => (
                                         <motion.tr
                                             key={item.barcode}
                                             initial={{ opacity: 0, y: 10 }}
