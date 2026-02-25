@@ -257,8 +257,16 @@ const Reports = () => {
                                             <td className="p-4 pl-6 font-mono text-blue-400">{item.barcode}</td>
                                             <td className="p-4 font-bold text-white">{item.name}</td>
                                             <td className="p-4 text-gray-400 text-sm">{item.description}</td>
-                                            <td className="p-4 text-right font-bold text-green-400 text-lg">{item.totalQty}</td>
-                                            <td className="p-4 text-right font-bold text-gray-300">{item.safe_stock}</td>
+                                            <td className="p-4 text-right pr-6">
+                                                <span className="px-3 py-1 rounded-lg font-bold bg-green-600/20 text-green-400">
+                                                    {item.totalQty}
+                                                </span>
+                                            </td>
+                                            <td className="p-4 text-right pr-6">
+                                                <span className="px-3 py-1 rounded-lg font-bold bg-red-600/20 text-red-400">
+                                                    {item.safe_stock || 0}
+                                                </span>
+                                            </td>
                                             <td className="p-4 text-gray-400 text-sm flex justify-between items-center group">
                                                 <div className="flex flex-wrap gap-2">
                                                     {item.locations.map((loc, i) => {
@@ -307,11 +315,15 @@ const Reports = () => {
                                                 </td>
                                                 <td className="p-4 text-white font-bold">{comp.required_qty}</td>
                                                 <td className="p-4 text-right">
-                                                    <span className={`font-bold ${comp.current_stock < comp.required_qty ? 'text-red-400' : 'text-green-400'}`}>
+                                                    <span className={`px-3 py-1 rounded-lg font-bold ${comp.current_stock < comp.required_qty ? 'bg-red-500/20 text-red-400' : 'bg-green-600/20 text-green-400'}`}>
                                                         {comp.current_stock}
                                                     </span>
                                                 </td>
-                                                <td className="p-4 text-right font-bold text-gray-300">{comp.safe_stock || 0}</td>
+                                                <td className="p-4 text-right pr-6">
+                                                    <span className="px-3 py-1 rounded-lg font-bold bg-red-600/20 text-red-400">
+                                                        {comp.safe_stock || 0}
+                                                    </span>
+                                                </td>
                                                 <td className="p-4">
                                                     <div className="flex flex-wrap gap-2">
                                                         {comp.locations ? comp.locations.split(',').map((loc, i) => {
@@ -346,7 +358,11 @@ const Reports = () => {
                                             className="hover:bg-gray-700/30 transition-colors"
                                         >
                                             <td className="p-4 pl-6 font-mono text-purple-400 font-bold">{loc.code}</td>
-                                            <td className="p-4 text-right font-bold text-white">{loc.quantity}</td>
+                                            <td className="p-4 text-right font-bold text-white">
+                                                <span className="px-3 py-1 rounded-lg font-bold bg-green-600/20 text-green-400">
+                                                    {loc.quantity}
+                                                </span>
+                                            </td>
                                             <td className="p-4 text-gray-400 text-sm">{loc.name} [{loc.barcode}]</td>
                                         </motion.tr>
                                     ))
