@@ -41,25 +41,31 @@ const MobileScanner = () => {
         if (scannerRef.current) return;
 
         setIsScanning(true);
-        const scanner = new Html5QrcodeScanner(
-            "reader",
-            {
-                fps: 20,
-                qrbox: { width: 300, height: 150 },
-                supportedScanTypes: [Html5QrcodeScanType.SCAN_TYPE_CAMERA]
-            },
-            false
-        );
+        setTimeout(() => {
+            try {
+                if (!document.getElementById("reader") || (step !== 1 && step !== 2)) return;
 
-        scanner.render((decodedText) => {
-            handleScanSuccess(decodedText);
-            // We usually pause or stop here if we want manual confirmation,
-            // but setting state triggers re-evaluations
-        }, (errorMessage) => {
-            // Ignore scan failures (happens every frame it doesn't find a code)
-        });
+                const scanner = new Html5QrcodeScanner(
+                    "reader",
+                    {
+                        fps: 20,
+                        qrbox: { width: 300, height: 150 },
+                        supportedScanTypes: [Html5QrcodeScanType.SCAN_TYPE_CAMERA]
+                    },
+                    false
+                );
 
-        scannerRef.current = scanner;
+                scanner.render((decodedText) => {
+                    handleScanSuccess(decodedText);
+                }, (errorMessage) => {
+                    // Ignore scan failures
+                });
+
+                scannerRef.current = scanner;
+            } catch (err) {
+                console.error("啟動相機失敗:", err);
+            }
+        }, 300);
     };
 
     const stopScanner = () => {
@@ -124,7 +130,6 @@ const MobileScanner = () => {
         setLocationCode('');
         setQuantity(1);
         setItemInfo(null);
-        startScanner();
     };
 
     const handleModeSwitch = (newMode) => {
@@ -170,13 +175,37 @@ const MobileScanner = () => {
             {/* Progress/Status Info */}
             <div className="px-4 mb-2">
                 <div className="bg-gray-800 rounded-xl p-4 border border-gray-700 flex flex-col gap-2 text-sm shadow-inner">
-                    <div className="flex justify-between items-center bg-gray-900 p-3 rounded-lg">
+                    <div
+                        className={clsx(
+                            "flex justify-between items-center bg-gray-900 p-3 rounded-lg border",
+                            step === 1 ? "border-blue-500" : "border-transparent cursor-pointer hover:border-gray-600"
+                        )}
+                        onClick={() => {
+                            if (step > 1) {
+                                setStep(1);
+                                setBarcode('');
+                                setLocationCode('');
+                                setItemInfo(null);
+                            }
+                        }}
+                    >
                         <span className="text-gray-500 font-bold">1. 料件</span>
-                        <span className="font-mono text-blue-400 font-bold truncate max-w-[200px]">{barcode || '尚未掃描'}</span>
+                        <span className="font-mono text-blue-400 font-bold truncate max-w-[200px]">{barcode || '尚未掃描...'}</span>
                     </div>
-                    <div className="flex justify-between items-center bg-gray-900 p-3 rounded-lg">
+                    <div
+                        className={clsx(
+                            "flex justify-between items-center bg-gray-900 p-3 rounded-lg border",
+                            step === 2 ? "border-yellow-500" : "border-transparent cursor-pointer hover:border-gray-600"
+                        )}
+                        onClick={() => {
+                            if (step > 2) {
+                                setStep(2);
+                                setLocationCode('');
+                            }
+                        }}
+                    >
                         <span className="text-gray-500 font-bold">2. 儲位</span>
-                        <span className="font-mono text-yellow-400 font-bold">{locationCode || '尚未掃描'}</span>
+                        <span className="font-mono text-yellow-400 font-bold">{locationCode || '尚未掃描...'}</span>
                     </div>
                 </div>
             </div>
@@ -250,8 +279,35 @@ const MobileScanner = () => {
                         >
                             <div className="text-center">
                                 <h2 className="text-2xl font-bold mb-2">確認數量</h2>
-                                <p className="text-gray-400 text-sm">{itemInfo?.item?.name}</p>
+                                <p className="text-gray-300 text-lg font-bold">{itemInfo?.item?.name}</p>
                             </div>
+
+                            {/* Existing Inventory Display */}
+                            {itemInfo?.inventory && itemInfo.inventory.length > 0 && (
+                                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700">
+                                    <h3 className="text-sm text-gray-400 mb-2 font-bold border-b border-gray-800 pb-2">目前庫存分佈</h3>
+                                    <div className="space-y-2 max-h-32 overflow-y-auto pr-1">
+                                        {itemInfo.inventory.map(inv => (
+                                            <div key={inv.id} className="flex justify-between items-center text-sm">
+                                                <span className={clsx("font-mono", inv.location_code === locationCode ? "text-yellow-400 font-bold" : "text-gray-400")}>
+                                                    {inv.location_code}
+                                                </span>
+                                                <span className={clsx("font-bold", inv.location_code === locationCode ? "text-blue-400 font-bold" : "text-gray-300")}>
+                                                    {inv.quantity} <span className="text-xs font-normal text-gray-500">{itemInfo?.item?.unit}</span>
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Warning for OUT operation on empty location */}
+                            {mode === 'OUT' && itemInfo?.inventory && !itemInfo.inventory.some(inv => inv.location_code === locationCode) && (
+                                <div className="bg-red-900/50 text-red-400 p-3 rounded-lg border border-red-800 text-sm flex items-start gap-2">
+                                    <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+                                    <span>警告：目前儲位 <b>{locationCode}</b> 系統上無此料件庫存，若強制出庫可能導致負庫存。</span>
+                                </div>
+                            )}
 
                             <div className="flex items-center justify-between bg-gray-900 p-4 rounded-2xl border border-gray-700">
                                 <button
