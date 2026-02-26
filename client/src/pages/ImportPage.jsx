@@ -88,6 +88,12 @@ const ImportPage = () => {
                         row.forEach((cell, colIndex) => {
                             if (cell && typeof cell === 'string' && cell.trim() !== '') {
                                 let code = cell.trim();
+
+                                // 防呆機制：如果只是一個孤立的英文字母，且距離左側太遠 (單一字母通常只用作左側的走道標題頭)，那就判定為 Excel 的誤打字元，將其濾除
+                                if (/^[A-Za-z]$/.test(code) && colIndex > 5) {
+                                    return; // 跳過此儲存格
+                                }
+
                                 const isVisual = code.includes('柱') || code.includes('門') || code.includes('走道') || code.includes('圖') || /^[A-Z]$/.test(code);
                                 if (isVisual) {
                                     const merge = previewMerges.find(m => m.s.c === colIndex && m.s.r === rowIndex);
