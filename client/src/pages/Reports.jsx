@@ -11,6 +11,7 @@ const Reports = () => {
     const [loading, setLoading] = useState(true);
     const [searchParams] = useSearchParams();
     const [activeTab, setActiveTab] = useState('item'); // 'item', 'location', 'bom', 'low_stock'
+    const [activeFloor, setActiveFloor] = useState(null);
 
     // Delete State
     const [deleteTarget, setDeleteTarget] = useState(null); // { barcode, name }
@@ -88,19 +89,41 @@ const Reports = () => {
     // Low Stock Summary
     const lowStockSummary = itemSummary.filter(i => i.totalQty < i.safe_stock);
 
-    // Process Data for Location Summary (Sorted by location code)
-    // To match user format ("儲位代碼", "元件品號", "品名", "規格", "庫存單位", "庫別名稱", "數量"), 
-    // we need to flatten the locations by item rather than grouping all items under a single location string.
-    const locationSummary = data.filter(curr => curr.location_code && curr.quantity > 0)
-        .map(curr => ({
-            code: curr.location_code,
-            barcode: curr.barcode,
-            name: curr.item_name,
-            description: curr.description || '',
-            unit: curr.unit || '',
-            category: curr.category || '',
-            quantity: curr.quantity
-        }))
+    // Extract unique floors for Location Summary mapping
+    const floors = [...new Set(data.filter(d => d.location_code).map(d => d.floor).filter(Boolean))];
+    if (floors.length === 0) floors.push('新大樓4樓');
+
+    // Set active floor if not set
+    useEffect(() => {
+        if (!activeFloor && floors.length > 0) {
+            setActiveFloor(floors[0]);
+        }
+    }, [floors, activeFloor]);
+
+    // Process Data for Location Summary (Grouped by location code, sorted)
+    // Filtered by active floor
+    const locationSummary = data.filter(curr => curr.location_code && curr.quantity > 0 && curr.floor === activeFloor)
+        .reduce((acc, curr) => {
+            let existing = acc.find(l => l.code === curr.location_code);
+            if (!existing) {
+                existing = {
+                    code: curr.location_code,
+                    totalQuantity: 0,
+                    items: []
+                };
+                acc.push(existing);
+            }
+            existing.totalQuantity += curr.quantity;
+            existing.items.push({
+                barcode: curr.barcode,
+                name: curr.item_name,
+                description: curr.description || '',
+                unit: curr.unit || '',
+                category: curr.category || '',
+                quantity: curr.quantity
+            });
+            return acc;
+        }, [])
         .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
 
     const handleExport = () => {
@@ -160,20 +183,22 @@ const Reports = () => {
             const wsLow = XLSX.utils.json_to_sheet(wsLowStockData);
             XLSX.utils.book_append_sheet(wb, wsLow, "低於安全庫存總表");
             XLSX.writeFile(wb, `庫存報表_低於安全庫存_${dateStr}.xlsx`);
-        } else {
             // Sheet 2: Location Summary
-            const ws2Data = locationSummary.map(l => ({
-                "儲位代碼": l.code,
-                "元件品號": l.barcode,
-                "品名": l.name,
-                "規格": l.description,
-                "庫存單位": l.unit,
-                "庫別名稱": l.category,
-                "數量": l.quantity
-            }));
+            const ws2Data = locationSummary.flatMap(l =>
+                l.items.map(item => ({
+                    "樓層": activeFloor,
+                    "儲位代碼": l.code,
+                    "元件品號": item.barcode,
+                    "品名": item.name,
+                    "規格": item.description,
+                    "庫存單位": item.unit,
+                    "庫別名稱": item.category,
+                    "數量": item.quantity
+                }))
+            );
             const ws2 = XLSX.utils.json_to_sheet(ws2Data);
-            XLSX.utils.book_append_sheet(wb, ws2, "儲位總表");
-            XLSX.writeFile(wb, `庫存報表_儲位總表_${dateStr}.xlsx`);
+            XLSX.utils.book_append_sheet(wb, ws2, `${activeFloor}儲位總表`);
+            XLSX.writeFile(wb, `庫存報表_${activeFloor}_儲位總表_${dateStr}.xlsx`);
         }
     };
 
@@ -236,6 +261,24 @@ const Reports = () => {
                     低於安全庫存總表
                 </button>
             </div>
+
+            {/* Sub-tabs for Floors when activeTab === 'location' */}
+            {activeTab === 'location' && floors.length > 0 && (
+                <div className="flex bg-gray-900 border border-gray-700 p-2 rounded-xl mb-4 gap-2 overflow-x-auto no-scrollbar">
+                    {floors.map(floor => (
+                        <button
+                            key={floor}
+                            onClick={() => setActiveFloor(floor)}
+                            className={`px-5 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${activeFloor === floor
+                                ? 'bg-purple-600 text-white shadow-lg'
+                                : 'text-gray-400 hover:text-white hover:bg-gray-800'
+                                }`}
+                        >
+                            {floor}
+                        </button>
+                    ))}
+                </div>
+            )}
 
             <div className="bg-gray-800 rounded-b-2xl rounded-tr-2xl border border-gray-700 overflow-hidden shadow-2xl min-h-[500px]">
                 {loading ? (
@@ -390,19 +433,39 @@ const Reports = () => {
                                 ) : (
                                     locationSummary.map((loc, idx) => (
                                         <motion.tr
-                                            key={`${loc.code}-${loc.barcode}`}
+                                            key={loc.code}
                                             initial={{ opacity: 0, y: 10 }}
                                             animate={{ opacity: 1, y: 0 }}
                                             transition={{ delay: idx * 0.02 }}
-                                            className="hover:bg-gray-700/30 transition-colors"
+                                            className="hover:bg-gray-700/30 transition-colors border-b border-gray-800 last:border-b-0"
                                         >
-                                            <td className="p-4 pl-6 font-mono text-purple-400 font-bold">{loc.code}</td>
-                                            <td className="p-4 text-right font-bold text-white">
+                                            <td className="p-4 pl-6 font-mono text-purple-400 font-bold align-top pt-5">{loc.code}</td>
+                                            <td className="p-4 text-right font-bold text-white align-top pt-5">
                                                 <span className="px-3 py-1 rounded-lg font-bold bg-green-600/20 text-green-400">
-                                                    {loc.quantity}
+                                                    {loc.totalQuantity}
                                                 </span>
                                             </td>
-                                            <td className="p-4 text-gray-400 text-sm">{loc.name} [{loc.barcode}]</td>
+                                            <td className="p-4 align-top">
+                                                <div className="flex flex-col gap-2">
+                                                    {loc.items.map((item, i) => (
+                                                        <div key={i} className="flex items-center gap-3 bg-gray-800/60 p-2.5 rounded-lg border border-gray-700/50 hover:border-gray-600 transition-colors">
+                                                            <span className="bg-blue-600/20 text-blue-400 px-2 py-1 rounded font-mono text-xs font-bold border border-blue-500/30">
+                                                                {item.barcode}
+                                                            </span>
+                                                            <span className="text-gray-300 font-bold text-sm">{item.name}</span>
+                                                            {item.description && (
+                                                                <span className="text-gray-500 text-xs line-clamp-1 max-w-[200px]" title={item.description}>
+                                                                    ({item.description})
+                                                                </span>
+                                                            )}
+                                                            <div className="ml-auto inline-flex items-center gap-1.5 shrink-0 bg-gray-900/50 px-2.5 py-1 rounded-md border border-gray-700/50">
+                                                                <span className="text-gray-500 text-xs">數量:</span>
+                                                                <span className="text-green-400 font-bold">{item.quantity}</span>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </td>
                                         </motion.tr>
                                     ))
                                 )}

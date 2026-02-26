@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { importItems, importInventory, importLocations, importBom } from '../api';
+import { importItems, importInventory, importLocations, importBom, renameFloor } from '../api';
 import * as XLSX from 'xlsx';
-import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, ShieldCheck } from 'lucide-react';
+import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, ShieldCheck, Edit3 } from 'lucide-react';
 
 const ImportPage = () => {
     // Import State
@@ -9,6 +9,10 @@ const ImportPage = () => {
     const [importStatus, setImportStatus] = useState(null); // { type: 'success'|'error', msg: '' }
     const [previewData, setPreviewData] = useState([]);
     const [previewMerges, setPreviewMerges] = useState([]);
+
+    // Map Specific State
+    const [floorNameInput, setFloorNameInput] = useState('新大樓4樓');
+    const [renameData, setRenameData] = useState({ oldName: '', newName: '', loading: false });
 
     // Get token from localStorage directly
     const token = localStorage.getItem('token');
@@ -89,10 +93,8 @@ const ImportPage = () => {
                             if (cell && typeof cell === 'string' && cell.trim() !== '') {
                                 let code = cell.trim();
 
-                                // 防呆機制：如果只是一個孤立的英文字母，且距離左側太遠 (單一字母通常只用作左側的走道標題頭)，那就判定為 Excel 的誤打字元，將其濾除
-                                if (/^[A-Za-z]$/.test(code) && colIndex > 15) {
-                                    return; // 跳過此儲存格
-                                }
+                                // 移除防呆機制：如果只是一個孤立的英文字母，且距離左側太遠，那就判定為 Excel 的誤打字元，將其濾除
+                                // 這個機制會導致 3 樓平面圖，在右側區域的 A、B 等英文字母標示被濾除，因此將其移除。
 
                                 const isVisual = code.includes('柱') || code.includes('門') || code.includes('走道') || code.includes('圖') || /^[A-Z]$/.test(code);
                                 if (isVisual) {
@@ -112,13 +114,35 @@ const ImportPage = () => {
                 });
 
                 if (locationsToInsert.length === 0) throw new Error("無效的儲位圖資料");
-                res = await importLocations(locationsToInsert, token);
+                if (!floorNameInput || floorNameInput.trim() === '') throw new Error("請輸入樓層名稱");
+
+                res = await importLocations(locationsToInsert, floorNameInput.trim(), token);
             }
 
             setImportStatus({ type: 'success', msg: `成功匯入 ${res.data.count} 筆資料！` });
             setPreviewData([]);
         } catch (err) {
             setImportStatus({ type: 'error', msg: '匯入失敗: ' + (err.response?.data?.error || err.message) });
+        }
+    };
+
+    const handleRenameFloor = async () => {
+        if (!renameData.oldName || !renameData.newName) {
+            setImportStatus({ type: 'error', msg: '請填寫完整的新舊樓層名稱' });
+            return;
+        }
+
+        const isConfirmed = window.confirm(`確定將「${renameData.oldName}」修改為「${renameData.newName}」嗎？`);
+        if (!isConfirmed) return;
+
+        setRenameData(prev => ({ ...prev, loading: true }));
+        try {
+            const res = await renameFloor(renameData.oldName.trim(), renameData.newName.trim(), token);
+            setImportStatus({ type: 'success', msg: `成功更新了 ${res.data.count} 個儲位歸屬至新樓層名稱！` });
+            setRenameData({ oldName: '', newName: '', loading: false });
+        } catch (err) {
+            setImportStatus({ type: 'error', msg: '修改名稱失敗: ' + (err.response?.data?.error || err.message) });
+            setRenameData(prev => ({ ...prev, loading: false }));
         }
     };
 
@@ -239,13 +263,60 @@ const ImportPage = () => {
                                 下載 Excel 範本 (.xlsx)
                             </button>
                         </div>
+
+                        <div className="mt-6 pt-6 border-t border-gray-700">
+                            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2 px-1">
+                                <Edit3 size={18} />
+                                3. 管理儲位圖
+                            </h3>
+                            <div className="bg-gray-900 border border-gray-700 p-4 rounded-xl space-y-3">
+                                <p className="text-xs text-gray-400 mb-2">修改現有樓層平面圖名稱：</p>
+                                <input
+                                    type="text"
+                                    placeholder="原樓層名稱 (如: 新大樓4樓)"
+                                    className="w-full bg-gray-800 text-white rounded px-3 py-2 border border-gray-600 text-sm focus:border-blue-500 focus:outline-none"
+                                    value={renameData.oldName}
+                                    onChange={(e) => setRenameData(prev => ({ ...prev, oldName: e.target.value }))}
+                                />
+                                <input
+                                    type="text"
+                                    placeholder="新樓層名稱 (如: 4F)"
+                                    className="w-full bg-gray-800 text-white rounded px-3 py-2 border border-gray-600 text-sm focus:border-blue-500 focus:outline-none"
+                                    value={renameData.newName}
+                                    onChange={(e) => setRenameData(prev => ({ ...prev, newName: e.target.value }))}
+                                />
+                                <button
+                                    onClick={handleRenameFloor}
+                                    disabled={renameData.loading}
+                                    className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg transition-colors text-sm font-bold flex justify-center items-center"
+                                >
+                                    {renameData.loading ? '處理中...' : '確認修改名稱'}
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
                 {/* Upload & Preview */}
                 <div className="lg:col-span-2">
                     <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 min-h-[500px]">
-                        <h3 className="text-lg font-bold text-white mb-4">3. 上傳檔案</h3>
+                        <h3 className="text-lg font-bold text-white mb-4">4. 上傳檔案</h3>
+
+                        {activeTab === 'locations' && (
+                            <div className="mb-6 bg-green-900/20 border border-green-500/30 p-4 rounded-xl">
+                                <label className="block text-green-400 font-bold mb-2">指定匯入樓層名稱</label>
+                                <input
+                                    type="text"
+                                    className="w-full bg-gray-900 text-white rounded-lg px-4 py-3 border border-gray-600 focus:border-green-500 focus:ring-1 focus:ring-green-500 focus:outline-none transition-colors"
+                                    placeholder="例如：新大樓4樓、A棟1F..."
+                                    value={floorNameInput}
+                                    onChange={(e) => setFloorNameInput(e.target.value)}
+                                />
+                                <p className="text-xs text-gray-400 mt-2">
+                                    提示：若樓層名稱與現有資料庫內的相同，將會「覆蓋」該樓層的現有地圖。若名稱不同，則會建立新分頁。
+                                </p>
+                            </div>
+                        )}
 
                         <div className="relative border-2 border-dashed border-gray-600 rounded-xl p-8 text-center hover:border-gray-500 transition-colors bg-gray-900/50">
                             <input

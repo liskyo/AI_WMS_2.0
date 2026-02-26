@@ -18,7 +18,8 @@ export const userLogin = (employee_id, password) => api.post('/admin/login', { e
 export const importItems = (items, token) => api.post('/admin/import/items', { items }, { headers: { Authorization: `Bearer ${token}` } });
 export const deleteItem = (barcode, password, token) => api.delete(`/admin/items/${barcode}`, { data: { password }, headers: { Authorization: `Bearer ${token}` } });
 export const importInventory = (inventory, token) => api.post('/admin/import/inventory', { inventory }, { headers: { Authorization: `Bearer ${token}` } });
-export const importLocations = (locations, token) => api.post('/admin/import/locations', { locations }, { headers: { Authorization: `Bearer ${token}` } });
+export const importLocations = (locations, floorName, token) => api.post('/admin/import/locations', { locations, floorName }, { headers: { Authorization: `Bearer ${token}` } });
+export const renameFloor = (oldName, newName, token) => api.put('/admin/locations/floor', { oldName, newName }, { headers: { Authorization: `Bearer ${token}` } });
 export const voidTransaction = (id, password, token) => api.post(`/admin/transactions/${id}/void`, { password }, { headers: { Authorization: `Bearer ${token}` } });
 
 // User Management

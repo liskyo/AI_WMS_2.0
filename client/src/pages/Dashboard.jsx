@@ -14,6 +14,10 @@ const Dashboard = () => {
     });
     const [lowStockItems, setLowStockItems] = useState([]);
 
+    // Floor Map State
+    const [floors, setFloors] = useState([]);
+    const [activeFloor, setActiveFloor] = useState(null);
+
     // Search State
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState(null); // null means no search active
@@ -44,6 +48,14 @@ const Dashboard = () => {
             // Compute low stock items
             const lowStockList = items.filter(item => item.total_quantity < (item.safe_stock || 0));
             setLowStockItems(lowStockList);
+
+            // Extract floors
+            const uniqueFloors = [...new Set(locations.map(l => l.floor).filter(Boolean))];
+            if (uniqueFloors.length === 0) uniqueFloors.push('新大樓4樓'); // Fallback default
+
+            // Avoid state overwrite loops; correctly use function setter
+            setFloors(prev => JSON.stringify(prev) === JSON.stringify(uniqueFloors) ? prev : uniqueFloors);
+            setActiveFloor(prev => prev || uniqueFloors[0]);
 
             setStats({
                 totalStock,
@@ -261,15 +273,36 @@ const Dashboard = () => {
 
             {/* Map */}
             <section>
-                <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-xl font-semibold text-white">平面圖</h3>
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
+                    <div className="flex items-center gap-4">
+                        <h3 className="text-xl font-semibold text-white truncate">平面圖</h3>
+
+                        {/* Floor Tabs */}
+                        {floors.length > 0 && (
+                            <div className="flex bg-gray-800 p-1 rounded-lg border border-gray-700 overflow-x-auto max-w-full no-scrollbar">
+                                {floors.map(floor => (
+                                    <button
+                                        key={floor}
+                                        onClick={() => setActiveFloor(floor)}
+                                        className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors whitespace-nowrap ${activeFloor === floor
+                                                ? 'bg-blue-600 text-white shadow'
+                                                : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                                            }`}
+                                    >
+                                        {floor}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
                     {searchResults && searchResults.highlights && (
-                        <span className="text-sm px-3 py-1 rounded-full bg-blue-600/20 text-blue-400 border border-blue-500/50">
+                        <span className="text-sm px-3 py-1 rounded-full bg-blue-600/20 text-blue-400 border border-blue-500/50 whitespace-nowrap">
                             🔍 搜尋結果: 找到 {searchResults.highlights.length} 個相關料架
                         </span>
                     )}
                 </div>
-                <MapGrid highlights={searchResults ? searchResults.highlights : null} />
+                <MapGrid highlights={searchResults ? searchResults.highlights : null} activeFloor={activeFloor} />
             </section>
         </div>
     );

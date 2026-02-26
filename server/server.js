@@ -28,7 +28,8 @@ const initDb = () => {
       type TEXT DEFAULT 'SHELF',
       x REAL,
       y REAL,
-      capacity INTEGER DEFAULT 100
+      capacity INTEGER DEFAULT 100,
+      floor TEXT DEFAULT '新大樓4樓'
     );
 
     CREATE TABLE IF NOT EXISTS items (
@@ -142,6 +143,14 @@ const initDb = () => {
       db.prepare('ALTER TABLE items ADD COLUMN safe_stock INTEGER DEFAULT 0').run();
       console.log('Migration: Added safe_stock to items table.');
     }
+
+    // Migration: Add floor to locations if not exists
+    const locationsTableInfo = db.prepare("PRAGMA table_info(locations)").all();
+    const hasFloor = locationsTableInfo.some(col => col.name === 'floor');
+    if (!hasFloor) {
+      db.prepare("ALTER TABLE locations ADD COLUMN floor TEXT DEFAULT '新大樓4樓'").run();
+      console.log('Migration: Added floor to locations table.');
+    }
   } catch (err) {
     console.warn('Migration specific error:', err);
   }
@@ -167,9 +176,9 @@ const seedLocations = () => {
       const merges = worksheet['!merges'] || [];
       const data = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
 
-      const insert = db.prepare('INSERT OR IGNORE INTO locations (code, type, x, y) VALUES (?, ?, ?, ?)');
+      const insert = db.prepare('INSERT OR IGNORE INTO locations (code, type, x, y, floor) VALUES (?, ?, ?, ?, ?)');
       const insertMany = db.transaction((locations) => {
-        for (const loc of locations) insert.run(loc.code, 'SHELF', loc.x, loc.y);
+        for (const loc of locations) insert.run(loc.code, 'SHELF', loc.x, loc.y, '新大樓4樓');
       });
 
       const locationsToInsert = [];
@@ -440,6 +449,7 @@ app.get('/api/reports/inventory', (req, res) => {
                     i.category,
                     i.safe_stock,
                     l.code as location_code, 
+                    l.floor,
                     IFNULL(inv.quantity, 0) as quantity
                 FROM items i
                 LEFT JOIN inventory inv ON i.id = inv.item_id AND inv.quantity > 0
@@ -852,7 +862,7 @@ app.post('/api/admin/import/inventory', requireAdmin, (req, res) => {
 
 // 9.5 Import Locations (Map)
 app.post('/api/admin/import/locations', requireAdmin, (req, res) => {
-  const { locations } = req.body; // Expects array of { code, x, y } directly
+  const { locations, floorName = '新大樓4樓' } = req.body; // Expects array of { code, x, y } directly
   if (!Array.isArray(locations)) return res.status(400).json({ error: 'Invalid format' });
 
   try {
@@ -861,28 +871,40 @@ app.post('/api/admin/import/locations', requireAdmin, (req, res) => {
       let updatedCount = 0;
       let deletedCount = 0;
 
-      // Extract all incoming codes
-      const incomingCodes = locs.map(l => l.code).filter(Boolean);
+      // Extract all incoming codes, matching the same suffix logic used for insertion
+      const incomingCodes = locs.map(l => {
+        let code = l.code;
+        if (code && code.startsWith('#V_#') && !code.includes(`_F:${floorName}`)) {
+          code = `${code}_F:${floorName}`;
+        }
+        return code;
+      }).filter(Boolean);
 
       // Handle newly imported locations (insert or update)
       for (const loc of locs) {
         if (!loc.code) continue;
 
-        const existing = db.prepare('SELECT id FROM locations WHERE code = ?').get(loc.code);
+        // Make sure visual elements are unique per floor by appending floorName if they are visual and don't already have it
+        let queryCode = loc.code;
+        if (queryCode.startsWith('#V_#') && !queryCode.includes(`_F:${floorName}`)) {
+          queryCode = `${queryCode}_F:${floorName}`;
+        }
+
+        const existing = db.prepare('SELECT id FROM locations WHERE code = ? AND floor = ?').get(queryCode, floorName);
         if (existing) {
           db.prepare('UPDATE locations SET x = ?, y = ? WHERE id = ?').run(loc.x, loc.y, existing.id);
           updatedCount++;
         } else {
-          db.prepare('INSERT INTO locations (code, type, x, y) VALUES (?, ?, ?, ?)').run(loc.code, 'SHELF', loc.x, loc.y);
+          db.prepare('INSERT INTO locations (code, type, x, y, floor) VALUES (?, ?, ?, ?, ?)').run(queryCode, 'SHELF', loc.x, loc.y, floorName);
           insertedCount++;
         }
       }
 
-      // Delete locations that are no longer in the map
+      // Delete locations that are no longer in the map FOR THIS FLOOR
       if (incomingCodes.length > 0) {
-        // Find locations not in the incoming list
+        // Find locations not in the incoming list for the current floor
         const placeholders = incomingCodes.map(() => '?').join(',');
-        const obsoleteLocations = db.prepare(`SELECT id, code FROM locations WHERE code NOT IN (${placeholders})`).all(incomingCodes);
+        const obsoleteLocations = db.prepare(`SELECT id, code FROM locations WHERE floor = ? AND code NOT IN (${placeholders})`).all(floorName, ...incomingCodes);
 
         for (const obs of obsoleteLocations) {
           // Check if there is inventory to prevent breaking data
@@ -906,6 +928,20 @@ app.post('/api/admin/import/locations', requireAdmin, (req, res) => {
     res.json({ success: true, count: result.insertedCount + result.updatedCount, details: result });
   } catch (err) {
     console.error('Import Locations Error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 9.6 Rename Floor
+app.put('/api/admin/locations/floor', requireAdmin, (req, res) => {
+  const { oldName, newName } = req.body;
+  if (!oldName || !newName) return res.status(400).json({ error: 'Missing oldName or newName' });
+
+  try {
+    const info = db.prepare('UPDATE locations SET floor = ? WHERE floor = ?').run(newName, oldName);
+    res.json({ success: true, count: info.changes });
+  } catch (err) {
+    console.error('Rename Floor Error:', err);
     res.status(500).json({ error: err.message });
   }
 });

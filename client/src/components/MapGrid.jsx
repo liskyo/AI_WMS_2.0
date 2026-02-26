@@ -3,7 +3,7 @@ import { getLocations } from '../api';
 import clsx from 'clsx';
 import { motion } from 'framer-motion';
 
-const MapGrid = ({ highlights = null }) => {
+const MapGrid = ({ highlights = null, activeFloor = null }) => {
     const [locations, setLocations] = useState([]);
     const [loading, setLoading] = useState(true);
 
@@ -29,24 +29,35 @@ const MapGrid = ({ highlights = null }) => {
         }
     };
 
+    // Filter by activeFloor if provided
+    const filteredLocations = useMemo(() => {
+        if (!activeFloor) return locations;
+        return locations.filter(l => l.floor === activeFloor);
+    }, [locations, activeFloor]);
+
     // Determine grid dimensions
     const dims = useMemo(() => {
-        if (!Array.isArray(locations) || locations.length === 0) return { maxX: 0, maxY: 0 };
-        const maxX = Math.max(...locations.map(l => l.x)) + 1;
-        const maxY = Math.max(...locations.map(l => l.y)) + 1;
+        if (!Array.isArray(filteredLocations) || filteredLocations.length === 0) return { maxX: 0, maxY: 0 };
+        const maxX = Math.max(...filteredLocations.map(l => l.x)) + 1;
+        const maxY = Math.max(...filteredLocations.map(l => l.y)) + 1;
         return { maxX, maxY };
-    }, [locations]);
+    }, [filteredLocations]);
 
     // Map locations to grid [y][x]
     const grid = useMemo(() => {
         const g = Array.from({ length: dims.maxY }, () => Array(dims.maxX).fill(null));
-        locations.forEach(loc => {
+        filteredLocations.forEach(loc => {
             if (g[loc.y] && g[loc.y][loc.x] !== undefined) {
                 g[loc.y][loc.x] = loc;
 
                 // Parse spans for visual elements
-                if (loc.code && loc.code.startsWith('#V_#')) {
-                    const parts = loc.code.replace('#V_#', '').split('_');
+                let rawCode = loc.code;
+                if (rawCode) {
+                    rawCode = rawCode.replace(/_F:.*$/, '');
+                }
+
+                if (rawCode && rawCode.startsWith('#V_#')) {
+                    const parts = rawCode.replace('#V_#', '').split('_');
                     const spanX = parseInt(parts[3]) || 1;
                     const spanY = parseInt(parts[4]) || 1;
 
@@ -64,7 +75,7 @@ const MapGrid = ({ highlights = null }) => {
             }
         });
         return g;
-    }, [locations, dims]);
+    }, [filteredLocations, dims]);
 
     if (loading) return <div className="text-white">Loading Map...</div>;
 
@@ -108,6 +119,9 @@ const MapGrid = ({ highlights = null }) => {
                                 spanX = parseInt(parts[3]) || 1;
                                 spanY = parseInt(parts[4]) || 1;
                             }
+                            // Remove floor suffix if it was added by backend for uniqueness
+                            displayCode = displayCode.replace(/_F:.*$/, '');
+
                             const normalizedCode = displayCode.replace(/^#/, '');
 
                             const hasStock = loc.total_quantity > 0;
