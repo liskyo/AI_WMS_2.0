@@ -189,7 +189,7 @@ const seedLocations = () => {
           if (cell && typeof cell === 'string' && cell.trim() !== '') {
             let code = cell.trim();
             // Prefix visual elements so they are unique in the database
-            const isVisual = code.includes('柱') || code.includes('門') || code.includes('走道') || code.includes('圖') || /^[A-Z]$/.test(code);
+            const isVisual = code.includes('柱') || code.includes('門') || code.includes('走道') || code.includes('圖') || /^[A-Z]{1,2}$/.test(code);
             if (isVisual) {
               // Find if this cell is the top-left of a merge
               const merge = merges.find(m => m.s.c === colIndex && m.s.r === rowIndex);

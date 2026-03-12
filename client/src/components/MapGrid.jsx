@@ -127,7 +127,7 @@ const MapGrid = ({ highlights = null, activeFloor = null }) => {
                             const hasStock = loc.total_quantity > 0;
                             const isGate = normalizedCode === '大門';
                             const isPillar = normalizedCode === '柱';
-                            const isLabel = /^(走道.*|.*儲位圖|[A-Z])$/.test(normalizedCode.trim());
+                            const isLabel = /^(走道.*|.*儲位圖|[A-Z]{1,2})$/.test(normalizedCode.trim());
 
                             // Visual Logic
                             let containerClass = "bg-gray-700/50 border border-gray-600 text-gray-500 hover:bg-gray-700"; // Default Empty

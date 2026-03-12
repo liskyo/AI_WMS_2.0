@@ -96,7 +96,7 @@ const ImportPage = () => {
                                 // 移除防呆機制：如果只是一個孤立的英文字母，且距離左側太遠，那就判定為 Excel 的誤打字元，將其濾除
                                 // 這個機制會導致 3 樓平面圖，在右側區域的 A、B 等英文字母標示被濾除，因此將其移除。
 
-                                const isVisual = code.includes('柱') || code.includes('門') || code.includes('走道') || code.includes('圖') || /^[A-Z]$/.test(code);
+                                const isVisual = code.includes('柱') || code.includes('門') || code.includes('走道') || code.includes('圖') || /^[A-Z]{1,2}$/.test(code);
                                 if (isVisual) {
                                     const merge = previewMerges.find(m => m.s.c === colIndex && m.s.r === rowIndex);
                                     const spanX = merge ? (merge.e.c - merge.s.c + 1) : 1;
