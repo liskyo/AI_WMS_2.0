@@ -27,7 +27,7 @@
 *   **Web Framework**: Express.js (處理 HTTP 請求、路由、Middleware)
 *   **Database Engine**: SQLite (檔案型關聯式資料庫，無需額外安裝 Server)
 *   **Database Client**: `better-sqlite3`
-    *   **同步特性 (Synchronous)**: 不同於一般的 Node.js 非同步操作，此套件操作 DB 是同步的。這意味著程式碼會從上而下依序執行，**不需要寫 `async/await`**，大幅降低邏輯複雜度，且效能極高。
+*   **同步特性 (Synchronous)**: 不同於一般的 Node.js 非同步操作，此套件操作 DB 是同步的。這意味著程式碼會從上而下依序執行，**不需要寫 `async/await`**，大幅降低邏輯複雜度，且效能極高。
 
 ### 1.1 為何選擇 SQLite? (SQLite 的好處與限制)
 

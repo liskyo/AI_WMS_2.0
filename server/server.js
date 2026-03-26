@@ -1,3 +1,4 @@
+require('./utils/backupScheduler');
 const express = require('express');
 const cors = require('cors');
 const Database = require('better-sqlite3');
