@@ -9,7 +9,7 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./warehouse.db:/app/server/warehouse.db
+      - ./server/warehouse.db:/app/server/warehouse.db
       - ./backups:/app/server/backups
       - ./uploads:/app/server/uploads
     environment:
