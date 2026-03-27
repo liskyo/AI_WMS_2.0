@@ -168,6 +168,34 @@ const Reports = () => {
             const wsBom = XLSX.utils.json_to_sheet(wsBomData);
             XLSX.utils.book_append_sheet(wb, wsBom, "主件總表");
             XLSX.writeFile(wb, `庫存報表_主件總表_${dateStr}.xlsx`);
+        } else if (activeTab === 'location') {
+            // Separate data into multiple sheets by Floor name
+            const sortedFloors = [...floors].sort();
+
+            sortedFloors.forEach(floorName => {
+                const wsData = data.filter(curr => curr.location_code && curr.quantity > 0 && curr.floor === floorName)
+                    .map(curr => ({
+                        "儲位代碼": curr.location_code,
+                        "元件品號": curr.barcode,
+                        "品名": curr.item_name,
+                        "規格": curr.description || '',
+                        "庫存單位": curr.unit || '',
+                        "庫別名稱": curr.category || '',
+                        "數量": curr.quantity
+                    }))
+                    .sort((a, b) => a.儲位代碼.localeCompare(b.儲位代碼, undefined, { numeric: true }));
+
+                if (wsData.length > 0) {
+                    const ws = XLSX.utils.json_to_sheet(wsData);
+                    XLSX.utils.book_append_sheet(wb, ws, floorName);
+                }
+            });
+
+            if (wb.SheetNames.length > 0) {
+                XLSX.writeFile(wb, `庫存報表_分樓層儲位總表_${dateStr}.xlsx`);
+            } else {
+                alert("目前無庫存資料可匯出");
+            }
         } else if (activeTab === 'low_stock') {
             // Sheet 4: Low Stock Summary
             const wsLowStockData = lowStockSummary.map(i => ({
@@ -183,22 +211,6 @@ const Reports = () => {
             const wsLow = XLSX.utils.json_to_sheet(wsLowStockData);
             XLSX.utils.book_append_sheet(wb, wsLow, "低於安全庫存總表");
             XLSX.writeFile(wb, `庫存報表_低於安全庫存_${dateStr}.xlsx`);
-            // Sheet 2: Location Summary
-            const ws2Data = locationSummary.flatMap(l =>
-                l.items.map(item => ({
-                    "樓層": activeFloor,
-                    "儲位代碼": l.code,
-                    "元件品號": item.barcode,
-                    "品名": item.name,
-                    "規格": item.description,
-                    "庫存單位": item.unit,
-                    "庫別名稱": item.category,
-                    "數量": item.quantity
-                }))
-            );
-            const ws2 = XLSX.utils.json_to_sheet(ws2Data);
-            XLSX.utils.book_append_sheet(wb, ws2, `${activeFloor}儲位總表`);
-            XLSX.writeFile(wb, `庫存報表_${activeFloor}_儲位總表_${dateStr}.xlsx`);
         }
     };
 
