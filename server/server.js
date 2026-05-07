@@ -11,8 +11,8 @@ const port = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
-
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Serve Static Files (Frontend)
 app.use(express.static(path.join(__dirname, '../client/dist')));
 
@@ -773,8 +773,9 @@ app.post('/api/admin/import/items', requireAdmin, (req, res) => {
 
       // 1. Delete items not in the imported list to ensure full overwrite
       if (incomingBarcodes.length > 0) {
-        const placeholders = incomingBarcodes.map(() => '?').join(',');
-        const obsoleteItems = db.prepare(`SELECT id, barcode FROM items WHERE barcode NOT IN (${placeholders})`).all(incomingBarcodes);
+        const allItems = db.prepare('SELECT id, barcode FROM items').all();
+        const incomingSet = new Set(incomingBarcodes);
+        const obsoleteItems = allItems.filter(item => !incomingSet.has(item.barcode));
 
         for (const obs of obsoleteItems) {
           // Delete related records to prevent FK constraint failures and completely clear the item
@@ -904,8 +905,9 @@ app.post('/api/admin/import/locations', requireAdmin, (req, res) => {
       // Delete locations that are no longer in the map FOR THIS FLOOR
       if (incomingCodes.length > 0) {
         // Find locations not in the incoming list for the current floor
-        const placeholders = incomingCodes.map(() => '?').join(',');
-        const obsoleteLocations = db.prepare(`SELECT id, code FROM locations WHERE floor = ? AND code NOT IN (${placeholders})`).all(floorName, ...incomingCodes);
+        const allLocations = db.prepare('SELECT id, code FROM locations WHERE floor = ?').all(floorName);
+        const incomingSet = new Set(incomingCodes);
+        const obsoleteLocations = allLocations.filter(loc => !incomingSet.has(loc.code));
 
         for (const obs of obsoleteLocations) {
           // Check if there is inventory to prevent breaking data
@@ -956,18 +958,20 @@ app.post('/api/admin/import/bom', requireAdmin, (req, res) => {
 
   try {
     const processBom = db.transaction((data) => {
-      // Find all unique main_barcodes in the incoming data
-      const mainBarcodes = [...new Set(data.map(r => r.main_barcode))];
+      // 1. Clear existing BOM configurations for full overwrite
+      db.prepare('DELETE FROM bom_items').run();
 
-      // Delete old configurations for these main items
-      const deleteStmt = db.prepare('DELETE FROM bom_items WHERE main_barcode = ?');
-      for (const mb of mainBarcodes) {
-        deleteStmt.run(mb);
-      }
+      // 2. Insert new configurations with ON CONFLICT to prevent UNIQUE constraint errors
+      // from duplicate rows in the imported Excel file.
+      const insertStmt = db.prepare(`
+        INSERT INTO bom_items (main_barcode, component_barcode, required_qty) 
+        VALUES (?, ?, ?)
+        ON CONFLICT(main_barcode, component_barcode) DO UPDATE SET 
+        required_qty = excluded.required_qty
+      `);
 
-      // Insert new configurations
-      const insertStmt = db.prepare('INSERT INTO bom_items (main_barcode, component_barcode, required_qty) VALUES (?, ?, ?)');
       for (const row of data) {
+        if (!row.main_barcode || !row.component_barcode) continue;
         insertStmt.run(row.main_barcode, row.component_barcode, parseFloat(row.required_qty) || 1);
       }
     });

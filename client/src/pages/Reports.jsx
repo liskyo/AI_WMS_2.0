@@ -12,6 +12,8 @@ const Reports = () => {
     const [searchParams] = useSearchParams();
     const [activeTab, setActiveTab] = useState('item'); // 'item', 'location', 'bom', 'low_stock'
     const [activeFloor, setActiveFloor] = useState(null);
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 100;
 
     // Delete State
     const [deleteTarget, setDeleteTarget] = useState(null); // { barcode, name }
@@ -46,6 +48,10 @@ const Reports = () => {
         const tab = searchParams.get('tab');
         if (['item', 'location', 'bom', 'low_stock'].includes(tab)) setActiveTab(tab);
     }, [searchParams]);
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [activeTab, activeFloor]);
 
     const fetchReport = async () => {
         try {
@@ -328,81 +334,89 @@ const Reports = () => {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-800">
-                                {activeTab === 'item' || activeTab === 'low_stock' ? (
-                                    (activeTab === 'item' ? itemSummary : lowStockSummary).map((item, idx) => (
-                                        <motion.tr
-                                            key={item.barcode}
-                                            initial={{ opacity: 0, y: 10 }}
-                                            animate={{ opacity: 1, y: 0 }}
-                                            transition={{ delay: idx * 0.02 }}
-                                            className="hover:bg-gray-700/30 transition-colors"
-                                        >
-                                            <td className="p-4 pl-6 font-mono text-blue-400">{item.barcode}</td>
-                                            <td className="p-4 font-bold text-white">{item.name}</td>
-                                            <td className="p-4 text-gray-400 text-sm">{item.description}</td>
-                                            <td className="p-4 text-right pr-6">
-                                                <span className="px-3 py-1 rounded-lg font-bold bg-green-600/20 text-green-400">
-                                                    {item.totalQty}
-                                                </span>
-                                            </td>
-                                            <td className="p-4 text-right pr-6">
-                                                <input
-                                                    type="number"
-                                                    value={item.safe_stock}
-                                                    onChange={(e) => {
-                                                        const val = parseInt(e.target.value) || 0;
-                                                        setData(prev => prev.map(d => d.barcode === item.barcode ? { ...d, safe_stock: val } : d));
-                                                    }}
-                                                    onBlur={(e) => {
-                                                        const val = parseInt(e.target.value) || 0;
-                                                        updateSafeStock(item.barcode, val).catch(() => alert('更新安全庫存失敗'));
-                                                    }}
-                                                    className="w-20 px-2 py-1 bg-red-600/20 text-red-500 font-bold text-center rounded-lg border border-red-500/30 focus:outline-none focus:ring-2 focus:ring-red-500 transition-all cursor-pointer hover:bg-red-500/20"
-                                                    min="0"
-                                                />
-                                            </td>
-                                            <td className="p-4 text-gray-400 text-sm flex justify-between items-center group">
-                                                <div className="flex flex-wrap gap-2">
-                                                    {item.locations.map((loc, i) => {
-                                                        const match = loc.match(/(.+?)\((.+?)\)/);
-                                                        return (
-                                                            <span key={i} className="bg-gray-800/80 border border-gray-600 px-2 py-1 rounded text-xs flex items-center shrink-0">
-                                                                {match ? (
-                                                                    <>
-                                                                        <span className="text-blue-300">{match[1]}</span>
-                                                                        <span className="text-yellow-500 font-bold ml-[2px]">({match[2]})</span>
-                                                                    </>
-                                                                ) : (
-                                                                    <span className="text-blue-300">{loc}</span>
-                                                                )}
-                                                            </span>
-                                                        );
-                                                    })}
-                                                </div>
-                                                {/* Delete Button (Only if Qty is 0) */}
-                                                {item.totalQty === 0 && (
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); openDeleteModal(item); }}
-                                                        className="opacity-0 group-hover:opacity-100 p-2 text-red-400 hover:bg-red-500/20 rounded-lg transition-all"
-                                                        title="刪除此料件 (需確認)"
-                                                    >
-                                                        <Trash2 size={18} />
-                                                    </button>
-                                                )}
-                                            </td>
-                                        </motion.tr>
-                                    ))
-                                ) : activeTab === 'bom' ? (
-                                    bomData.flatMap((bom) =>
-                                        bom.components.map((comp, idx) => (
+                                {(() => {
+                                    let currentDataArray = [];
+                                    if (activeTab === 'item') currentDataArray = itemSummary;
+                                    else if (activeTab === 'low_stock') currentDataArray = lowStockSummary;
+                                    else if (activeTab === 'location') currentDataArray = locationSummary;
+                                    else if (activeTab === 'bom') currentDataArray = bomData.flatMap(bom => bom.components.map(comp => ({ bom, comp })));
+
+                                    const paginatedData = currentDataArray.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+                                    if (activeTab === 'item' || activeTab === 'low_stock') {
+                                        return paginatedData.map((item, idx) => (
+                                            <motion.tr
+                                                key={item.barcode}
+                                                initial={{ opacity: 0, y: 10 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                transition={{ delay: (idx % itemsPerPage) * 0.02 }}
+                                                className="hover:bg-gray-700/30 transition-colors"
+                                            >
+                                                <td className="p-4 pl-6 font-mono text-blue-400">{item.barcode}</td>
+                                                <td className="p-4 font-bold text-white">{item.name}</td>
+                                                <td className="p-4 text-gray-400 text-sm">{item.description}</td>
+                                                <td className="p-4 text-right pr-6">
+                                                    <span className="px-3 py-1 rounded-lg font-bold bg-green-600/20 text-green-400">
+                                                        {item.totalQty}
+                                                    </span>
+                                                </td>
+                                                <td className="p-4 text-right pr-6">
+                                                    <input
+                                                        type="number"
+                                                        value={item.safe_stock}
+                                                        onChange={(e) => {
+                                                            const val = parseInt(e.target.value) || 0;
+                                                            setData(prev => prev.map(d => d.barcode === item.barcode ? { ...d, safe_stock: val } : d));
+                                                        }}
+                                                        onBlur={(e) => {
+                                                            const val = parseInt(e.target.value) || 0;
+                                                            updateSafeStock(item.barcode, val).catch(() => alert('更新安全庫存失敗'));
+                                                        }}
+                                                        className="w-20 px-2 py-1 bg-red-600/20 text-red-500 font-bold text-center rounded-lg border border-red-500/30 focus:outline-none focus:ring-2 focus:ring-red-500 transition-all cursor-pointer hover:bg-red-500/20"
+                                                        min="0"
+                                                    />
+                                                </td>
+                                                <td className="p-4 text-gray-400 text-sm flex justify-between items-center group">
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {item.locations.map((loc, i) => {
+                                                            const match = loc.match(/(.+?)\((.+?)\)/);
+                                                            return (
+                                                                <span key={i} className="bg-gray-800/80 border border-gray-600 px-2 py-1 rounded text-xs flex items-center shrink-0">
+                                                                    {match ? (
+                                                                        <>
+                                                                            <span className="text-blue-300">{match[1]}</span>
+                                                                            <span className="text-yellow-500 font-bold ml-[2px]">({match[2]})</span>
+                                                                        </>
+                                                                    ) : (
+                                                                        <span className="text-blue-300">{loc}</span>
+                                                                    )}
+                                                                </span>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                    {/* Delete Button (Only if Qty is 0) */}
+                                                    {item.totalQty === 0 && (
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); openDeleteModal(item); }}
+                                                            className="opacity-0 group-hover:opacity-100 p-2 text-red-400 hover:bg-red-500/20 rounded-lg transition-all"
+                                                            title="刪除此料件 (需確認)"
+                                                        >
+                                                            <Trash2 size={18} />
+                                                        </button>
+                                                    )}
+                                                </td>
+                                            </motion.tr>
+                                        ));
+                                    } else if (activeTab === 'bom') {
+                                        return paginatedData.map(({ bom, comp }, idx) => (
                                             <motion.tr
                                                 key={`${bom.main_barcode}-${comp.component_barcode}`}
                                                 initial={{ opacity: 0, y: 10 }}
                                                 animate={{ opacity: 1, y: 0 }}
-                                                transition={{ delay: idx * 0.02 }}
+                                                transition={{ delay: (idx % itemsPerPage) * 0.02 }}
                                                 className="hover:bg-gray-700/30 transition-colors"
                                             >
-                                                <td className="p-4 pl-6 font-mono text-yellow-400 font-bold">{idx === 0 ? bom.main_barcode : ''}</td>
+                                                <td className="p-4 pl-6 font-mono text-yellow-400 font-bold">{bomData.findIndex(b => b === bom) !== -1 && bomData.find(b => b === bom).components[0] === comp ? bom.main_barcode : ''}</td>
                                                 <td className="p-4 font-mono text-blue-400">
                                                     <div>{comp.component_barcode}</div>
                                                     <div className="text-xs text-gray-500">{comp.component_name}</div>
@@ -440,52 +454,94 @@ const Reports = () => {
                                                     </div>
                                                 </td>
                                             </motion.tr>
-                                        ))
-                                    )
-                                ) : (
-                                    locationSummary.map((loc, idx) => (
-                                        <motion.tr
-                                            key={loc.code}
-                                            initial={{ opacity: 0, y: 10 }}
-                                            animate={{ opacity: 1, y: 0 }}
-                                            transition={{ delay: idx * 0.02 }}
-                                            className="hover:bg-gray-700/30 transition-colors border-b border-gray-800 last:border-b-0"
-                                        >
-                                            <td className="p-4 pl-6 font-mono text-purple-400 font-bold align-top pt-5">{loc.code}</td>
-                                            <td className="p-4 text-right font-bold text-white align-top pt-5">
-                                                <span className="px-3 py-1 rounded-lg font-bold bg-green-600/20 text-green-400">
-                                                    {loc.totalQuantity}
-                                                </span>
-                                            </td>
-                                            <td className="p-4 align-top">
-                                                <div className="flex flex-col gap-2">
-                                                    {loc.items.map((item, i) => (
-                                                        <div key={i} className="flex items-center gap-3 bg-gray-800/60 p-2.5 rounded-lg border border-gray-700/50 hover:border-gray-600 transition-colors">
-                                                            <span className="bg-blue-600/20 text-blue-400 px-2 py-1 rounded font-mono text-xs font-bold border border-blue-500/30">
-                                                                {item.barcode}
-                                                            </span>
-                                                            <span className="text-gray-300 font-bold text-sm">{item.name}</span>
-                                                            {item.description && (
-                                                                <span className="text-gray-500 text-xs line-clamp-1 max-w-[200px]" title={item.description}>
-                                                                    ({item.description})
+                                        ));
+                                    } else {
+                                        return paginatedData.map((loc, idx) => (
+                                            <motion.tr
+                                                key={loc.code}
+                                                initial={{ opacity: 0, y: 10 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                transition={{ delay: (idx % itemsPerPage) * 0.02 }}
+                                                className="hover:bg-gray-700/30 transition-colors border-b border-gray-800 last:border-b-0"
+                                            >
+                                                <td className="p-4 pl-6 font-mono text-purple-400 font-bold align-top pt-5">{loc.code}</td>
+                                                <td className="p-4 text-right font-bold text-white align-top pt-5">
+                                                    <span className="px-3 py-1 rounded-lg font-bold bg-green-600/20 text-green-400">
+                                                        {loc.totalQuantity}
+                                                    </span>
+                                                </td>
+                                                <td className="p-4 align-top">
+                                                    <div className="flex flex-col gap-2">
+                                                        {loc.items.map((item, i) => (
+                                                            <div key={i} className="flex items-center gap-3 bg-gray-800/60 p-2.5 rounded-lg border border-gray-700/50 hover:border-gray-600 transition-colors">
+                                                                <span className="bg-blue-600/20 text-blue-400 px-2 py-1 rounded font-mono text-xs font-bold border border-blue-500/30">
+                                                                    {item.barcode}
                                                                 </span>
-                                                            )}
-                                                            <div className="ml-auto inline-flex items-center gap-1.5 shrink-0 bg-gray-900/50 px-2.5 py-1 rounded-md border border-gray-700/50">
-                                                                <span className="text-gray-500 text-xs">數量:</span>
-                                                                <span className="text-green-400 font-bold">{item.quantity}</span>
+                                                                <span className="text-gray-300 font-bold text-sm">{item.name}</span>
+                                                                {item.description && (
+                                                                    <span className="text-gray-500 text-xs line-clamp-1 max-w-[200px]" title={item.description}>
+                                                                        ({item.description})
+                                                                    </span>
+                                                                )}
+                                                                <div className="ml-auto inline-flex items-center gap-1.5 shrink-0 bg-gray-900/50 px-2.5 py-1 rounded-md border border-gray-700/50">
+                                                                    <span className="text-gray-500 text-xs">數量:</span>
+                                                                    <span className="text-green-400 font-bold">{item.quantity}</span>
+                                                                </div>
                                                             </div>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </td>
-                                        </motion.tr>
-                                    ))
-                                )}
+                                                        ))}
+                                                    </div>
+                                                </td>
+                                            </motion.tr>
+                                        ));
+                                    }
+                                })()}
                             </tbody>
                         </table>
                     </div>
                 )}
             </div>
+
+            {/* Pagination Controls */}
+            {(() => {
+                let currentDataArray = [];
+                if (activeTab === 'item') currentDataArray = itemSummary;
+                else if (activeTab === 'low_stock') currentDataArray = lowStockSummary;
+                else if (activeTab === 'location') currentDataArray = locationSummary;
+                else if (activeTab === 'bom') currentDataArray = bomData.flatMap(bom => bom.components.map(comp => ({ bom, comp })));
+
+                const totalItems = currentDataArray.length;
+                if (totalItems <= itemsPerPage) return null;
+
+                const totalPages = Math.ceil(totalItems / itemsPerPage);
+
+                return (
+                    <div className="flex justify-between items-center bg-gray-800 p-4 rounded-xl border border-gray-700">
+                        <span className="text-gray-400">
+                            顯示第 {(currentPage - 1) * itemsPerPage + 1} 到 {Math.min(currentPage * itemsPerPage, totalItems)} 筆，
+                            共 <span className="font-bold text-white">{totalItems}</span> 筆
+                        </span>
+                        <div className="flex gap-2">
+                            <button
+                                disabled={currentPage === 1}
+                                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-white font-bold transition-colors"
+                            >
+                                上一頁
+                            </button>
+                            <span className="px-4 py-2 bg-gray-900 rounded-lg text-blue-400 font-bold border border-gray-700">
+                                {currentPage} / {totalPages}
+                            </span>
+                            <button
+                                disabled={currentPage === totalPages}
+                                onClick={() => setCurrentPage(prev => prev + 1)}
+                                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-white font-bold transition-colors"
+                            >
+                                下一頁
+                            </button>
+                        </div>
+                    </div>
+                );
+            })()}
 
             {/* Delete Confirmation Modal */}
             {isDeleteModalOpen && (

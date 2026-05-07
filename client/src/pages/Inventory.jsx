@@ -9,8 +9,11 @@ const Inventory = () => {
     const [bomData, setBomData] = useState([]);
     const [search, setSearch] = useState('');
     const [loading, setLoading] = useState(false);
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 100;
 
     useEffect(() => {
+        setCurrentPage(1);
         if (activeTab === 'item') {
             fetchItems();
         } else {
@@ -108,12 +111,12 @@ const Inventory = () => {
                             <tr><td colSpan="5" className="p-8 text-center text-gray-400">搜尋中...</td></tr>
                         ) : activeTab === 'item' ? (
                             items.length > 0 ? (
-                                items.map((item, idx) => (
+                                items.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map((item, idx) => (
                                     <motion.tr
                                         key={item.id}
                                         initial={{ opacity: 0, y: 10 }}
                                         animate={{ opacity: 1, y: 0 }}
-                                        transition={{ delay: idx * 0.05 }}
+                                        transition={{ delay: (idx % itemsPerPage) * 0.05 }}
                                         className="hover:bg-gray-700/30 transition-colors"
                                     >
                                         <td className="p-4 pl-6 font-mono text-blue-400 font-medium">{item.barcode}</td>
@@ -161,16 +164,20 @@ const Inventory = () => {
                             )
                         ) : (
                             bomData.length > 0 ? (
-                                bomData.flatMap((bom, bIdx) =>
-                                    bom.components.map((comp, cIdx) => (
+                                (() => {
+                                    const allBomItems = bomData.flatMap(bom => bom.components.map(comp => ({ bom, comp })));
+                                    const currentBomItems = allBomItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+                                    return currentBomItems.map(({ bom, comp }, cIdx) => {
+                                        const bIdx = bomData.indexOf(bom);
+                                        return (
                                         <motion.tr
                                             key={`${bom.main_barcode}-${comp.component_barcode}`}
                                             initial={{ opacity: 0, y: 10 }}
                                             animate={{ opacity: 1, y: 0 }}
-                                            transition={{ delay: (bIdx * 0.1) + (cIdx * 0.02) }}
+                                            transition={{ delay: (cIdx % itemsPerPage) * 0.02 }}
                                             className="hover:bg-gray-700/30 transition-colors"
                                         >
-                                            <td className="p-4 pl-6 font-mono text-yellow-400 font-bold">{cIdx === 0 ? bom.main_barcode : ''}</td>
+                                            <td className="p-4 pl-6 font-mono text-yellow-400 font-bold">{bomData.findIndex(b => b === bom) !== -1 && bomData.find(b => b === bom).components[0] === comp ? bom.main_barcode : ''}</td>
                                             <td className="p-4 font-mono text-blue-400">
                                                 <div>{comp.component_barcode}</div>
                                                 <div className="text-xs text-gray-500">{comp.component_name}</div>
@@ -208,8 +215,9 @@ const Inventory = () => {
                                                 </span>
                                             </td>
                                         </motion.tr>
-                                    ))
-                                )
+                                        );
+                                    });
+                                })()
                             ) : (
                                 <tr>
                                     <td colSpan="4" className="p-8 text-center text-gray-500">
@@ -221,6 +229,35 @@ const Inventory = () => {
                     </tbody>
                 </table>
             </div>
+
+            {/* Pagination Controls */}
+            {((activeTab === 'item' && items.length > itemsPerPage) || (activeTab === 'bom' && bomData.flatMap(b => b.components).length > itemsPerPage)) && (
+                <div className="flex justify-between items-center bg-gray-800 p-4 rounded-xl border border-gray-700">
+                    <span className="text-gray-400">
+                        顯示第 {(currentPage - 1) * itemsPerPage + 1} 到 {Math.min(currentPage * itemsPerPage, activeTab === 'item' ? items.length : bomData.flatMap(b => b.components).length)} 筆，
+                        共 <span className="font-bold text-white">{activeTab === 'item' ? items.length : bomData.flatMap(b => b.components).length}</span> 筆
+                    </span>
+                    <div className="flex gap-2">
+                        <button
+                            disabled={currentPage === 1}
+                            onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-white font-bold transition-colors"
+                        >
+                            上一頁
+                        </button>
+                        <span className="px-4 py-2 bg-gray-900 rounded-lg text-blue-400 font-bold border border-gray-700">
+                            {currentPage} / {Math.ceil((activeTab === 'item' ? items.length : bomData.flatMap(b => b.components).length) / itemsPerPage)}
+                        </span>
+                        <button
+                            disabled={currentPage === Math.ceil((activeTab === 'item' ? items.length : bomData.flatMap(b => b.components).length) / itemsPerPage)}
+                            onClick={() => setCurrentPage(prev => prev + 1)}
+                            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-white font-bold transition-colors"
+                        >
+                            下一頁
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

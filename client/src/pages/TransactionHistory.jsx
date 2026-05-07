@@ -10,7 +10,13 @@ const TransactionHistory = () => {
     const [transactions, setTransactions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 100;
     const { user } = useAuth();
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchTerm]);
 
     // Delete Modal State
     const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -151,7 +157,7 @@ const TransactionHistory = () => {
                                     <td colSpan={canDelete ? 8 : 7} className="p-8 text-center text-gray-500">無符合的紀錄</td>
                                 </tr>
                             ) : (
-                                filteredTransactions.map((t) => (
+                                filteredTransactions.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map((t) => (
                                     <tr key={t.id} className={clsx("hover:bg-gray-700/30 transition-colors group", t.is_deleted && "opacity-50 bg-red-900/10")}>
                                         <td className="p-4 text-gray-300 whitespace-nowrap text-sm">
                                             {new Date(t.timestamp + (t.timestamp.includes('Z') ? '' : 'Z')).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false })}
@@ -213,6 +219,35 @@ const TransactionHistory = () => {
                     </table>
                 </div>
             </div>
+
+            {/* Pagination Controls */}
+            {filteredTransactions.length > itemsPerPage && (
+                <div className="flex justify-between items-center bg-gray-800 p-4 rounded-xl border border-gray-700 mt-4">
+                    <span className="text-gray-400">
+                        顯示第 {(currentPage - 1) * itemsPerPage + 1} 到 {Math.min(currentPage * itemsPerPage, filteredTransactions.length)} 筆，
+                        共 <span className="font-bold text-white">{filteredTransactions.length}</span> 筆
+                    </span>
+                    <div className="flex gap-2">
+                        <button
+                            disabled={currentPage === 1}
+                            onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-white font-bold transition-colors"
+                        >
+                            上一頁
+                        </button>
+                        <span className="px-4 py-2 bg-gray-900 rounded-lg text-blue-400 font-bold border border-gray-700">
+                            {currentPage} / {Math.ceil(filteredTransactions.length / itemsPerPage)}
+                        </span>
+                        <button
+                            disabled={currentPage === Math.ceil(filteredTransactions.length / itemsPerPage)}
+                            onClick={() => setCurrentPage(prev => prev + 1)}
+                            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-white font-bold transition-colors"
+                        >
+                            下一頁
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {/* Delete Confirmation Modal */}
             <AnimatePresence>
