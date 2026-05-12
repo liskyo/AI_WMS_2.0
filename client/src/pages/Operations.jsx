@@ -11,6 +11,9 @@ const Operations = () => {
     const [barcode, setBarcode] = useState('');
     const [locationCode, setLocationCode] = useState('');
     const [quantity, setQuantity] = useState('');
+    const [locationMismatch, setLocationMismatch] = useState(false);
+    const [quantityOverflow, setQuantityOverflow] = useState(false);
+    const [maxAllowedQty, setMaxAllowedQty] = useState(null);
     const [itemInfo, setItemInfo] = useState(null);
     const [bomInfo, setBomInfo] = useState(() => {
         const saved = sessionStorage.getItem('wms_ops_bomInfo');
@@ -47,18 +50,59 @@ const Operations = () => {
             const comp = bomOutData.components.find(c => c.component_barcode === barcode);
             if (comp) {
                 const remaining = Math.max(0, comp.required_total - comp.picked_total);
+                setMaxAllowedQty(remaining);
                 if (remaining > 0) {
                     setQuantity(remaining.toString());
                 }
+            } else {
+                setMaxAllowedQty(null);
             }
+        } else {
+            setMaxAllowedQty(null);
         }
     }, [barcode, mode, bomOutData.isActive, bomOutData.components]);
+
+    // 驗證 BOM 出庫數量不超過剩餘應出數量
+    useEffect(() => {
+        if (mode === 'BOM_OUT' && bomOutData.isActive && maxAllowedQty !== null && quantity !== '') {
+            setQuantityOverflow(parseFloat(quantity) > maxAllowedQty);
+        } else {
+            setQuantityOverflow(false);
+        }
+    }, [quantity, mode, bomOutData.isActive, maxAllowedQty]);
 
     // Cleanup and Focus Management
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState(null); // { type: 'success' | 'error', text: '' }
 
     const barcodeInputRef = useRef(null);
+
+    // 驗證出庫儲位是否與料件實際所在儲位相符
+    useEffect(() => {
+        if ((mode === 'OUT' || (mode === 'BOM_OUT' && bomOutData.isActive)) && locationCode.trim()) {
+            // 出庫模式 - 一般出庫查 itemInfo, BOM_OUT 查元件的 locations
+            if (mode === 'OUT' && itemInfo) {
+                const validLocations = itemInfo.inventory.map(inv => inv.location_code);
+                setLocationMismatch(validLocations.length > 0 && !validLocations.includes(locationCode.trim()));
+            } else if (mode === 'BOM_OUT' && bomOutData.isActive && barcode) {
+                const comp = bomOutData.components.find(c => c.component_barcode === barcode.trim());
+                if (comp && comp.locations) {
+                    const locList = comp.locations.split(',').map(l => {
+                        const trimmed = l.trim();
+                        const colonIdx = trimmed.lastIndexOf(':');
+                        return colonIdx > 0 ? trimmed.substring(0, colonIdx) : trimmed;
+                    });
+                    setLocationMismatch(locList.length > 0 && locList[0] !== '' && !locList.includes(locationCode.trim()));
+                } else {
+                    setLocationMismatch(false);
+                }
+            } else {
+                setLocationMismatch(false);
+            }
+        } else {
+            setLocationMismatch(false);
+        }
+    }, [locationCode, mode, itemInfo, bomOutData, barcode]);
 
     useEffect(() => {
         if (barcode) {
@@ -148,6 +192,9 @@ const Operations = () => {
             setLocationCode('');
             setQuantity('');
             setItemInfo(null);
+            setLocationMismatch(false);
+            setQuantityOverflow(false);
+            setMaxAllowedQty(null);
             barcodeInputRef.current?.focus();
         } catch (err) {
             setMessage({ type: 'error', text: err.response?.data?.error || '操作失敗' });
@@ -390,6 +437,12 @@ const Operations = () => {
                                             disabled={mode !== 'BOM_OUT' && !itemInfo}
                                         />
                                     </div>
+                                    {locationMismatch && (
+                                        <div className="mt-2 p-3 bg-red-500/20 border border-red-500/50 rounded-xl flex items-center gap-2 text-red-400 font-bold text-sm animate-pulse">
+                                            <AlertTriangle size={18} />
+                                            <span>⚠️ 此儲位非該料件目前所在位置！無法出庫。正確儲位請參考右側庫存分佈。</span>
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div>
@@ -402,16 +455,22 @@ const Operations = () => {
                                         placeholder="1"
                                         value={quantity}
                                         onChange={(e) => setQuantity(e.target.value)}
-                                        min="0.001"
+                                        min={mode === 'BOM_OUT' && bomOutData.isActive ? "0" : "0.001"}
                                         step="any"
                                         required
                                         disabled={mode !== 'BOM_OUT' && !itemInfo}
                                     />
+                                    {quantityOverflow && (
+                                        <div className="mt-2 p-3 bg-red-500/20 border border-red-500/50 rounded-xl flex items-center gap-2 text-red-400 font-bold text-sm animate-pulse">
+                                            <AlertTriangle size={18} />
+                                            <span>⚠️ 數量超過剩餘應出數量（最多 {maxAllowedQty}）！無法出庫。</span>
+                                        </div>
+                                    )}
                                 </div>
 
                                 <button
                                     type="submit"
-                                    disabled={loading || (mode !== 'BOM_OUT' && !itemInfo)}
+                                    disabled={loading || (mode !== 'BOM_OUT' && !itemInfo) || locationMismatch || quantityOverflow}
                                     className={clsx(
                                         "w-full py-4 rounded-xl font-bold text-lg shadow-lg transform transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed",
                                         mode === 'IN'
