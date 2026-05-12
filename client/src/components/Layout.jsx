@@ -19,10 +19,10 @@ const Layout = () => {
     const navItems = [
         { path: '/dashboard', label: '總覽 (地圖)', icon: LayoutDashboard, visible: true },
         { path: '/operations', label: '出入庫作業', icon: ArrowRightLeft, visible: hasPermission('IN') || hasPermission('OUT') },
-        { path: '/history', label: '出入庫紀錄', icon: History, visible: hasPermission('VIEW') },
+        { path: '/history', label: '出入庫紀錄', icon: History, visible: hasPermission('HISTORY') || hasPermission('VIEW') },
         { path: '/inventory', label: '庫存查詢', icon: Package, visible: hasPermission('VIEW') },
-        { path: '/reports', label: '庫存報表', icon: FileBarChart, visible: hasPermission('VIEW') },
-        { path: '/stockcheck', label: '盤點作業', icon: ClipboardCheck, visible: hasPermission('VIEW') },
+        { path: '/reports', label: '庫存報表', icon: FileBarChart, visible: hasPermission('REPORT') || hasPermission('VIEW') },
+        { path: '/stockcheck', label: '盤點作業', icon: ClipboardCheck, visible: hasPermission('STOCKCHECK') || hasPermission('VIEW') },
         { path: '/import', label: '資料匯入', icon: Settings, visible: hasPermission('IMPORT') },
         { path: '/users', label: '人員管理', icon: Shield, visible: user?.group_name === '管理者' || hasPermission('ALL') },
     ];

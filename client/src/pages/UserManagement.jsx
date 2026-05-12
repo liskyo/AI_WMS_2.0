@@ -8,9 +8,14 @@ const PERMISSIONS = [
     { id: 'ALL', label: '全功能 (Super Admin)' },
     { id: 'IN', label: '入庫作業' },
     { id: 'OUT', label: '出庫作業' },
-    { id: 'VIEW', label: '庫存查詢及報表' },
+    { id: 'HISTORY', label: '出入庫紀錄' },
+    { id: 'VIEW', label: '庫存查詢' },
+    { id: 'REPORT', label: '庫存報表' },
+    { id: 'STOCKCHECK', label: '盤點作業' },
     { id: 'IMPORT', label: '資料匯入' }
 ];
+
+const PERM_LABEL_MAP = Object.fromEntries(PERMISSIONS.map(p => [p.id, p.label]));
 
 const UserManagement = () => {
     const [users, setUsers] = useState([]);
@@ -110,7 +115,15 @@ const UserManagement = () => {
                                 <td className="p-4 font-bold text-white">{user.name}</td>
                                 <td className="p-4 font-mono">{user.employee_id}</td>
                                 <td className="p-4"><span className="bg-gray-700 px-2 py-1 rounded text-sm">{user.group_name}</span></td>
-                                <td className="p-4 text-xs max-w-xs truncate">{user.permissions.join(', ')}</td>
+                                <td className="p-4 text-xs max-w-xs">
+                                    <div className="flex flex-wrap gap-1">
+                                        {user.permissions.map(p => (
+                                            <span key={p} className="bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded text-xs border border-purple-500/30">
+                                                {PERM_LABEL_MAP[p] || p}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </td>
                                 <td className="p-4 text-sm text-gray-400">{user.email}</td>
                                 <td className="p-4 text-right space-x-2">
                                     <button onClick={() => { setEditingUser(user); setFormData({ ...user, password: '' }); setIsModalOpen(true); }} className="text-blue-400 hover:text-blue-300"><Edit size={18} /></button>
