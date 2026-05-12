@@ -5,6 +5,7 @@ const api = axios.create({
 });
 
 export const getLocations = () => api.get('/locations');
+export const getLocationInventory = (code) => api.get(`/locations/${encodeURIComponent(code)}/inventory`);
 export const getItems = (q) => api.get('/items', { params: { q } });
 export const getItemDetails = (barcode) => api.get(`/items/${barcode}`);
 export const submitTransaction = (data, token) => api.post('/transaction', data, { headers: { Authorization: `Bearer ${token}` } });

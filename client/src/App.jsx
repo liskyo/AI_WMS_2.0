@@ -12,6 +12,7 @@ import { AuthProvider } from './context/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import TransactionHistory from './pages/TransactionHistory';
 import MobileScanner from './pages/MobileScanner';
+import StockCheck from './pages/StockCheck';
 
 function App() {
   return (
@@ -30,6 +31,7 @@ function App() {
               <Route path="/history" element={<TransactionHistory />} />
               <Route path="/inventory" element={<Inventory />} />
               <Route path="/reports" element={<Reports />} />
+              <Route path="/stockcheck" element={<StockCheck />} />
               <Route path="/import" element={<ImportPage />} />
               <Route path="/users" element={<UserManagement />} />
             </Route>

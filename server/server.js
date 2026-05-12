@@ -344,6 +344,34 @@ app.get('/api/items/:barcode', (req, res) => {
   res.json({ item, inventory });
 });
 
+// 3.5 Get Inventory by Location Code (for Stocktake)
+app.get('/api/locations/:code/inventory', (req, res) => {
+  const { code } = req.params;
+  try {
+    const location = db.prepare('SELECT * FROM locations WHERE code = ?').get(code);
+    if (!location) return res.status(404).json({ error: 'Location not found' });
+
+    const inventory = db.prepare(`
+      SELECT 
+        it.barcode,
+        it.name,
+        it.description,
+        it.unit,
+        inv.quantity,
+        inv.updated_at
+      FROM inventory inv
+      JOIN items it ON inv.item_id = it.id
+      WHERE inv.location_id = ? AND inv.quantity > 0
+      ORDER BY it.barcode
+    `).all(location.id);
+
+    res.json({ location, inventory });
+  } catch (err) {
+    console.error('Error fetching location inventory:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 4. Transaction (Inbound/Outbound)
 app.post('/api/transaction', (req, res) => {
   const { type, barcode, location_code, quantity, ref_order } = req.body;
