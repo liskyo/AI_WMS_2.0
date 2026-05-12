@@ -152,6 +152,20 @@ const initDb = () => {
       db.prepare("ALTER TABLE locations ADD COLUMN floor TEXT DEFAULT '新大樓4樓'").run();
       console.log('Migration: Added floor to locations table.');
     }
+
+    // Migration: Add is_closed to locations if not exists
+    const hasIsClosed = locationsTableInfo.some(col => col.name === 'is_closed');
+    if (!hasIsClosed) {
+      db.prepare('ALTER TABLE locations ADD COLUMN is_closed INTEGER DEFAULT 0').run();
+      console.log('Migration: Added is_closed to locations table.');
+    }
+
+    // Migration: Add closed_reason to locations if not exists
+    const hasClosedReason = locationsTableInfo.some(col => col.name === 'closed_reason');
+    if (!hasClosedReason) {
+      db.prepare('ALTER TABLE locations ADD COLUMN closed_reason TEXT').run();
+      console.log('Migration: Added closed_reason to locations table.');
+    }
   } catch (err) {
     console.warn('Migration specific error:', err);
   }
@@ -364,6 +378,7 @@ app.post('/api/transaction', (req, res) => {
       // 2. Find Location
       const location = db.prepare('SELECT * FROM locations WHERE code = ?').get(location_code);
       if (!location) throw new Error('Location not found');
+      if (location.is_closed) throw new Error(`儲位 ${location_code} 已關閉：${location.closed_reason || '無說明'}`);
 
       // 3. Update Inventory
       const existingInv = db.prepare('SELECT * FROM inventory WHERE item_id = ? AND location_id = ?').get(item.id, location.id);
@@ -949,6 +964,28 @@ app.put('/api/admin/locations/floor', requireAdmin, (req, res) => {
   }
 });
 
+// 9.7 Toggle Location Close/Open
+app.patch('/api/admin/locations/:id/toggle-close', requireAdmin, (req, res) => {
+  const { id } = req.params;
+  const { is_closed, closed_reason } = req.body;
+
+  try {
+    const location = db.prepare('SELECT * FROM locations WHERE id = ?').get(id);
+    if (!location) return res.status(404).json({ error: 'Location not found' });
+
+    db.prepare('UPDATE locations SET is_closed = ?, closed_reason = ? WHERE id = ?').run(
+      is_closed ? 1 : 0,
+      is_closed ? (closed_reason || '') : null,
+      id
+    );
+
+    res.json({ success: true, code: location.code, is_closed: !!is_closed });
+  } catch (err) {
+    console.error('Toggle Location Close Error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- BOM (Bill of Materials) Endpoints ---
 
 // 10. Import BOM
@@ -1062,8 +1099,9 @@ app.post('/api/transactions/bom-out', (req, res) => {
         if (!item) throw new Error(`Component item not found: ${pick.barcode}`);
 
         // 2. Find Location ID
-        const location = db.prepare('SELECT id FROM locations WHERE code = ?').get(pick.location_code);
+        const location = db.prepare('SELECT * FROM locations WHERE code = ?').get(pick.location_code);
         if (!location) throw new Error(`Location not found: ${pick.location_code}`);
+        if (location.is_closed) throw new Error(`儲位 ${pick.location_code} 已關閉：${location.closed_reason || '無說明'}`);
 
         // 3. Find and verify existing inventory
         const existingInv = db.prepare('SELECT * FROM inventory WHERE item_id = ? AND location_id = ?').get(item.id, location.id);

@@ -21,6 +21,7 @@ export const importInventory = (inventory, token) => api.post('/admin/import/inv
 export const importLocations = (locations, floorName, token) => api.post('/admin/import/locations', { locations, floorName }, { headers: { Authorization: `Bearer ${token}` } });
 export const renameFloor = (oldName, newName, token) => api.put('/admin/locations/floor', { oldName, newName }, { headers: { Authorization: `Bearer ${token}` } });
 export const voidTransaction = (id, password, token) => api.post(`/admin/transactions/${id}/void`, { password }, { headers: { Authorization: `Bearer ${token}` } });
+export const toggleLocationClose = (id, is_closed, closed_reason, token) => api.patch(`/admin/locations/${id}/toggle-close`, { is_closed, closed_reason }, { headers: { Authorization: `Bearer ${token}` } });
 
 // User Management
 export const getUsers = (token) => api.get('/users', { headers: { Authorization: `Bearer ${token}` } });
