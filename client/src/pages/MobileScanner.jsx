@@ -4,6 +4,7 @@ import { Html5QrcodeScanner, Html5QrcodeScanType, Html5QrcodeSupportedFormats } 
 import { ArrowDownToLine, ArrowUpFromLine, CheckCircle, AlertTriangle, Scan, X, RefreshCw } from 'lucide-react';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
+import { INVALID_ITEM_BARCODE, OPS_TX_SUCCESS, OPERATION_FAILED, MOBILE_IN, MOBILE_OUT, axiosErrorDetail } from '../userFacingMessages';
 
 const MobileScanner = () => {
     const [mode, setMode] = useState('IN'); // IN or OUT
@@ -95,7 +96,7 @@ const MobileScanner = () => {
             setItemInfo(res.data);
             setStep(2); // Proceed to location scan on success
         } catch (e) {
-            setMessage({ type: 'error', text: '無效的料件條碼: ' + code });
+            setMessage({ type: 'error', text: INVALID_ITEM_BARCODE(code) });
             setBarcode(''); // reset barcode to scan again
             if (!isScanning) startScanner(); // Restart scanner if stopped
         } finally {
@@ -115,10 +116,11 @@ const MobileScanner = () => {
                 quantity: parseFloat(quantity)
             }, token);
 
-            setMessage({ type: 'success', text: `成功${mode === 'IN' ? '入庫' : '出庫'}! 最新數量: ${res.data.newQty}` });
+            const inOutLabel = mode === 'IN' ? MOBILE_IN : MOBILE_OUT;
+            setMessage({ type: 'success', text: OPS_TX_SUCCESS(inOutLabel, res.data.newQty) });
             resetFlow();
         } catch (err) {
-            setMessage({ type: 'error', text: err.response?.data?.error || '操作失敗' });
+            setMessage({ type: 'error', text: axiosErrorDetail(err, OPERATION_FAILED) });
         } finally {
             setLoading(false);
         }

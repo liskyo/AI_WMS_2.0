@@ -3,6 +3,7 @@ import { getLocationInventory } from '../api';
 import { Scan, ClipboardCheck, CheckCircle, Package, AlertTriangle, RotateCcw } from 'lucide-react';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
+import { QUERY_FAILED_FALLBACK, STOCK_LOCATION_EMPTY_ZH_EN, axiosErrorDetail } from '../userFacingMessages';
 
 const StockCheck = () => {
     const [locationCode, setLocationCode] = useState('');
@@ -29,12 +30,12 @@ const StockCheck = () => {
             setLocationInfo(res.data.location);
             setInventory(res.data.inventory);
             if (res.data.inventory.length === 0) {
-                setError('此儲位目前無庫存料件');
+                setError(STOCK_LOCATION_EMPTY_ZH_EN);
             }
         } catch (err) {
             setLocationInfo(null);
             setInventory([]);
-            setError(err.response?.data?.error || '查詢失敗，請確認儲位代碼');
+            setError(axiosErrorDetail(err, QUERY_FAILED_FALLBACK));
         } finally {
             setLoading(false);
         }

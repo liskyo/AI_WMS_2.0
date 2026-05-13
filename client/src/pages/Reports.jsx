@@ -1,9 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { getInventoryReport, deleteItem, getBom, updateSafeStock } from '../api';
 import * as XLSX from 'xlsx';
 import { Download, Layers, MapPin, Trash2, X, AlertTriangle, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'framer-motion';
+import {
+    REPORT_DELETE_OK,
+    DELETE_ROW_FAILED_PREFIX,
+    EXPORT_NO_REPORT,
+    SAFE_STOCK_UPDATE_FAILED,
+    axiosErrorDetail,
+} from '../userFacingMessages';
 
 const Reports = () => {
     const [data, setData] = useState([]);
@@ -21,6 +28,21 @@ const Reports = () => {
     const [showPassword, setShowPassword] = useState(false);
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
+    const fetchReport = useCallback(async () => {
+        try {
+            const [res, bomRes] = await Promise.all([
+                getInventoryReport(),
+                getBom()
+            ]);
+            setData(res.data);
+            setBomData(bomRes.data);
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
     const openDeleteModal = (item) => {
         setDeleteTarget(item);
         setDeletePassword('');
@@ -35,11 +57,11 @@ const Reports = () => {
             // Retrieve token if needed, or pass empty if relying on cookie (but we use token in headers)
             const token = localStorage.getItem('token');
             await deleteItem(deleteTarget.barcode, deletePassword, token);
-            alert('刪除成功！');
+            alert(REPORT_DELETE_OK);
             setIsDeleteModalOpen(false);
             fetchReport(); // Refresh data
         } catch (err) {
-            alert('刪除失敗: ' + (err.response?.data?.error || err.message));
+            alert(`${DELETE_ROW_FAILED_PREFIX}: ${axiosErrorDetail(err, '（無詳細說明）')}`);
         }
     };
 
@@ -47,80 +69,68 @@ const Reports = () => {
         fetchReport();
         const tab = searchParams.get('tab');
         if (['item', 'location', 'bom', 'low_stock'].includes(tab)) setActiveTab(tab);
-    }, [searchParams]);
+    }, [searchParams, fetchReport]);
 
     useEffect(() => {
         setCurrentPage(1);
     }, [activeTab, activeFloor]);
 
-    const fetchReport = async () => {
-        try {
-            const [res, bomRes] = await Promise.all([
-                getInventoryReport(),
-                getBom()
-            ]);
-            setData(res.data);
-            setBomData(bomRes.data);
-        } catch (err) {
-            console.error(err);
-        } finally {
-            setLoading(false);
-        }
-    };
+    const floors = useMemo(() => {
+        const next = [...new Set(data.filter(d => d.location_code).map(d => d.floor).filter(Boolean))];
+        if (next.length === 0) next.push('新大樓4樓');
+        return next;
+    }, [data]);
 
-    // Process Data for Item Summary (Sorted by barcode)
-    const itemSummary = data.reduce((acc, curr) => {
-        const existing = acc.find(i => i.barcode === curr.barcode);
-        // Format location string if location exists
-        const locStr = curr.location_code ? `${curr.location_code}(${curr.quantity})` : null;
-
-        if (existing) {
-            existing.totalQty += curr.quantity;
-            if (locStr) existing.locations.push(locStr);
-        } else {
-            acc.push({
-                barcode: curr.barcode,
-                name: curr.item_name,
-                description: curr.description || '',
-                unit: curr.unit || '',
-                category: curr.category || '',
-                safe_stock: curr.safe_stock || 0,
-                totalQty: curr.quantity,
-                locations: locStr ? [locStr] : []
-            });
-        }
-        return acc;
-    }, []).sort((a, b) => a.barcode.localeCompare(b.barcode, undefined, { numeric: true }));
-
-    // Low Stock Summary
-    const lowStockSummary = itemSummary.filter(i => i.totalQty < i.safe_stock);
-
-    // Extract unique floors for Location Summary mapping
-    const floors = [...new Set(data.filter(d => d.location_code).map(d => d.floor).filter(Boolean))];
-    if (floors.length === 0) floors.push('新大樓4樓');
-
-    // Set active floor if not set
     useEffect(() => {
         if (!activeFloor && floors.length > 0) {
             setActiveFloor(floors[0]);
         }
-    }, [floors, activeFloor]);
+    }, [activeFloor, floors]);
 
-    // Process Data for Location Summary (Grouped by location code, sorted)
-    // Filtered by active floor
-    const locationSummary = data.filter(curr => curr.location_code && curr.quantity > 0 && curr.floor === activeFloor)
-        .reduce((acc, curr) => {
-            let existing = acc.find(l => l.code === curr.location_code);
-            if (!existing) {
-                existing = {
+    const itemSummary = useMemo(() => {
+        const byBarcode = new Map();
+        for (const curr of data) {
+            const locStr = curr.location_code ? `${curr.location_code}(${curr.quantity})` : null;
+            let row = byBarcode.get(curr.barcode);
+            if (!row) {
+                row = {
+                    barcode: curr.barcode,
+                    name: curr.item_name,
+                    description: curr.description || '',
+                    unit: curr.unit || '',
+                    category: curr.category || '',
+                    safe_stock: curr.safe_stock || 0,
+                    totalQty: 0,
+                    locations: []
+                };
+                byBarcode.set(curr.barcode, row);
+            }
+            row.totalQty += curr.quantity;
+            if (locStr) row.locations.push(locStr);
+        }
+        return [...byBarcode.values()].sort((a, b) => a.barcode.localeCompare(b.barcode, undefined, { numeric: true }));
+    }, [data]);
+
+    const lowStockSummary = useMemo(
+        () => itemSummary.filter(i => i.totalQty < i.safe_stock),
+        [itemSummary]
+    );
+
+    const locationSummary = useMemo(() => {
+        const locMap = new Map();
+        for (const curr of data) {
+            if (!curr.location_code || curr.quantity <= 0 || curr.floor !== activeFloor) continue;
+            let row = locMap.get(curr.location_code);
+            if (!row) {
+                row = {
                     code: curr.location_code,
                     totalQuantity: 0,
                     items: []
                 };
-                acc.push(existing);
+                locMap.set(curr.location_code, row);
             }
-            existing.totalQuantity += curr.quantity;
-            existing.items.push({
+            row.totalQuantity += curr.quantity;
+            row.items.push({
                 barcode: curr.barcode,
                 name: curr.item_name,
                 description: curr.description || '',
@@ -128,9 +138,9 @@ const Reports = () => {
                 category: curr.category || '',
                 quantity: curr.quantity
             });
-            return acc;
-        }, [])
-        .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
+        }
+        return [...locMap.values()].sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
+    }, [data, activeFloor]);
 
     const handleExport = () => {
         const wb = XLSX.utils.book_new();
@@ -200,7 +210,7 @@ const Reports = () => {
             if (wb.SheetNames.length > 0) {
                 XLSX.writeFile(wb, `庫存報表_分樓層儲位總表_${dateStr}.xlsx`);
             } else {
-                alert("目前無庫存資料可匯出");
+                alert(EXPORT_NO_REPORT);
             }
         } else if (activeTab === 'low_stock') {
             // Sheet 4: Low Stock Summary
@@ -370,7 +380,7 @@ const Reports = () => {
                                                         }}
                                                         onBlur={(e) => {
                                                             const val = parseInt(e.target.value) || 0;
-                                                            updateSafeStock(item.barcode, val).catch(() => alert('更新安全庫存失敗'));
+                                                            updateSafeStock(item.barcode, val).catch(() => alert(SAFE_STOCK_UPDATE_FAILED));
                                                         }}
                                                         className="w-20 px-2 py-1 bg-red-600/20 text-red-500 font-bold text-center rounded-lg border border-red-500/30 focus:outline-none focus:ring-2 focus:ring-red-500 transition-all cursor-pointer hover:bg-red-500/20"
                                                         min="0"

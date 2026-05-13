@@ -2,6 +2,16 @@ import { useState, useEffect } from 'react';
 import { importItems, importInventory, importLocations, importBom, renameFloor } from '../api';
 import * as XLSX from 'xlsx';
 import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, ShieldCheck, Edit3 } from 'lucide-react';
+import {
+    IMPORT_FAILED_PREFIX,
+    RENAME_FLOOR_FAILED_PREFIX,
+    FLOOR_NAMES_REQUIRED,
+    IMPORT_SUCCESS,
+    RENAME_FLOOR_SUCCESS,
+    IMPORT_INVALID_GRID,
+    IMPORT_FLOOR_NAME_REQUIRED,
+    axiosErrorDetail,
+} from '../userFacingMessages';
 
 const ImportPage = () => {
     // Import State
@@ -113,22 +123,25 @@ const ImportPage = () => {
                     }
                 });
 
-                if (locationsToInsert.length === 0) throw new Error("無效的儲位圖資料");
-                if (!floorNameInput || floorNameInput.trim() === '') throw new Error("請輸入樓層名稱");
+                if (locationsToInsert.length === 0) throw new Error(IMPORT_INVALID_GRID);
+                if (!floorNameInput || floorNameInput.trim() === '') throw new Error(IMPORT_FLOOR_NAME_REQUIRED);
 
                 res = await importLocations(locationsToInsert, floorNameInput.trim(), token);
             }
 
-            setImportStatus({ type: 'success', msg: `成功匯入 ${res.data.count} 筆資料！` });
+            setImportStatus({ type: 'success', msg: IMPORT_SUCCESS(res.data.count) });
             setPreviewData([]);
         } catch (err) {
-            setImportStatus({ type: 'error', msg: '匯入失敗: ' + (err.response?.data?.error || err.message) });
+            setImportStatus({
+                type: 'error',
+                msg: `${IMPORT_FAILED_PREFIX}: ${axiosErrorDetail(err, '（無詳細說明）')}`,
+            });
         }
     };
 
     const handleRenameFloor = async () => {
         if (!renameData.oldName || !renameData.newName) {
-            setImportStatus({ type: 'error', msg: '請填寫完整的新舊樓層名稱' });
+            setImportStatus({ type: 'error', msg: FLOOR_NAMES_REQUIRED });
             return;
         }
 
@@ -138,10 +151,13 @@ const ImportPage = () => {
         setRenameData(prev => ({ ...prev, loading: true }));
         try {
             const res = await renameFloor(renameData.oldName.trim(), renameData.newName.trim(), token);
-            setImportStatus({ type: 'success', msg: `成功更新了 ${res.data.count} 個儲位歸屬至新樓層名稱！` });
+            setImportStatus({ type: 'success', msg: RENAME_FLOOR_SUCCESS(res.data.count) });
             setRenameData({ oldName: '', newName: '', loading: false });
         } catch (err) {
-            setImportStatus({ type: 'error', msg: '修改名稱失敗: ' + (err.response?.data?.error || err.message) });
+            setImportStatus({
+                type: 'error',
+                msg: `${RENAME_FLOOR_FAILED_PREFIX}: ${axiosErrorDetail(err, '（無詳細說明）')}`,
+            });
             setRenameData(prev => ({ ...prev, loading: false }));
         }
     };

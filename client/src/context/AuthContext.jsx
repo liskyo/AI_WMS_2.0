@@ -1,5 +1,6 @@
 import { createContext, useState, useContext, useEffect } from 'react';
 import { userLogin } from '../api';
+import { LOGIN_FAILED, axiosErrorDetail } from '../userFacingMessages';
 
 const AuthContext = createContext(null);
 
@@ -33,7 +34,7 @@ export const AuthProvider = ({ children }) => {
         } catch (err) {
             return {
                 success: false,
-                error: err.response?.data?.error || '登入失敗'
+                error: axiosErrorDetail(err, LOGIN_FAILED)
             };
         }
     };

@@ -1,12 +1,45 @@
 import axios from 'axios';
+import { DETAIL_LINES_ZH_EN } from './backendOfflineMessages';
 
 const api = axios.create({
     baseURL: '/api', // Proxy will handle this in dev, relative path in prod
 });
 
+const REACH = 'wms-backend-reachable';
+const UNREACH = 'wms-backend-unreachable';
+
+api.interceptors.response.use(
+    (response) => {
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent(REACH));
+        }
+        return response;
+    },
+    (error) => {
+        const noResponse = !error.response;
+        const canceled =
+            error.code === 'ERR_CANCELED' ||
+            error.name === 'CanceledError' ||
+            (typeof error.message === 'string' && error.message.toLowerCase().includes('cancel'));
+        if (noResponse && typeof window !== 'undefined' && !canceled) {
+            window.dispatchEvent(
+                new CustomEvent(UNREACH, {
+                    detail: { hint: DETAIL_LINES_ZH_EN },
+                })
+            );
+        }
+        return Promise.reject(error);
+    }
+);
+
 export const getLocations = () => api.get('/locations');
 export const getLocationInventory = (code) => api.get(`/locations/${encodeURIComponent(code)}/inventory`);
-export const getItems = (q) => api.get('/items', { params: { q } });
+export const getItems = (q, opts = {}) => {
+    const params = {};
+    if (q !== undefined && q !== null && String(q).trim() !== '') params.q = q;
+    if (opts.summary) params.summary = '1';
+    return api.get('/items', { params });
+};
 export const getItemDetails = (barcode) => api.get(`/items/${barcode}`);
 export const submitTransaction = (data, token) => api.post('/transaction', data, { headers: { Authorization: `Bearer ${token}` } });
 export const createItem = (data) => api.post('/items', data);

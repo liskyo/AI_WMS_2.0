@@ -1,64 +1,102 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import api, { voidTransaction } from '../api';
 import { Download, Search, Clock, User, Package, MapPin, ArrowDownToLine, ArrowUpFromLine, Trash2, Eye, EyeOff, AlertTriangle } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
 import { useAuth } from '../context/AuthContext';
+import { EXPORT_FAILED, EXPORT_NO_ROWS, DELETE_VOID_FAILED, axiosErrorDetail } from '../userFacingMessages';
 
 const TransactionHistory = () => {
     const [transactions, setTransactions] = useState([]);
+    const [totalCount, setTotalCount] = useState(0);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
     const itemsPerPage = 100;
-    const { user } = useAuth();
-
-    useEffect(() => {
-        setCurrentPage(1);
-    }, [searchTerm]);
-
-    // Delete Modal State
     const [deleteModalOpen, setDeleteModalOpen] = useState(false);
     const [deleteTarget, setDeleteTarget] = useState(null);
     const [adminPassword, setAdminPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const [deleteError, setDeleteError] = useState('');
     const [isDeleting, setIsDeleting] = useState(false);
+    const { user } = useAuth();
 
     useEffect(() => {
-        fetchTransactions();
-    }, []);
+        const t = setTimeout(() => setDebouncedSearch(searchTerm), 300);
+        return () => clearTimeout(t);
+    }, [searchTerm]);
 
-    const fetchTransactions = async () => {
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchTerm]);
+
+    const fetchTransactions = useCallback(async () => {
+        setLoading(true);
         try {
-            const res = await api.get('/transactions');
-            setTransactions(res.data);
+            const res = await api.get('/transactions', {
+                params: {
+                    q: debouncedSearch.trim() || undefined,
+                    limit: itemsPerPage,
+                    offset: (currentPage - 1) * itemsPerPage,
+                },
+            });
+            const body = res.data;
+            const items = Array.isArray(body) ? body : body.items;
+            const total = Array.isArray(body) ? body.length : body.total;
+            setTransactions(items || []);
+            setTotalCount(Number.isFinite(total) ? total : 0);
         } catch (err) {
             console.error('Error fetching transactions:', err);
+            setTransactions([]);
+            setTotalCount(0);
         } finally {
             setLoading(false);
         }
-    };
+    }, [currentPage, debouncedSearch, itemsPerPage]);
 
-    const handleExport = () => {
-        const data = transactions.map(t => ({
-            '時間': new Date(t.timestamp).toLocaleString(),
-            '動作': t.type === 'IN' ? '入庫' : '出庫',
-            '狀態': t.is_deleted ? '已刪除' : '正常',
-            '料件條碼': t.barcode,
-            '料件名稱': t.item_name,
-            '儲位': t.location_code,
-            '數量': t.quantity,
-            '工號': t.employee_id || '-',
-            '經手人': t.user_name || '-',
-            '刪除者': t.deleter_name || '-'
-        }));
+    useEffect(() => {
+        fetchTransactions();
+    }, [fetchTransactions]);
 
-        const ws = XLSX.utils.json_to_sheet(data);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Transactions");
-        XLSX.writeFile(wb, `WMS_Transactions_${new Date().toISOString().split('T')[0]}.xlsx`);
+    const handleExport = async () => {
+        try {
+            const res = await api.get('/transactions', {
+                params: {
+                    q: debouncedSearch.trim() || undefined,
+                    limit: 25000,
+                    offset: 0,
+                },
+            });
+            const body = res.data;
+            const rows = Array.isArray(body) ? body : body.items || [];
+            if (rows.length === 0) {
+                alert(EXPORT_NO_ROWS);
+                return;
+            }
+
+            const data = rows.map(t => ({
+                '時間': new Date(t.timestamp).toLocaleString(),
+                '動作': t.type === 'IN' ? '入庫' : '出庫',
+                '狀態': t.is_deleted ? '已刪除' : '正常',
+                '料件條碼': t.barcode,
+                '料件名稱': t.item_name,
+                '儲位': t.location_code,
+                '數量': t.quantity,
+                '工號': t.employee_id || '-',
+                '經手人': t.user_name || '-',
+                '刪除者': t.deleter_name || '-'
+            }));
+
+            const ws = XLSX.utils.json_to_sheet(data);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Transactions');
+            XLSX.writeFile(wb, `WMS_Transactions_${new Date().toISOString().split('T')[0]}.xlsx`);
+        } catch (err) {
+            console.error('Export failed:', err);
+            alert(EXPORT_FAILED);
+        }
     };
 
     const openDeleteModal = (tx) => {
@@ -71,7 +109,7 @@ const TransactionHistory = () => {
 
     const handleVoid = async () => {
         if (!adminPassword) {
-            setDeleteError('請輸入密碼');
+            setDeleteError('請輸入密碼 Please enter password');
             return;
         }
         setIsDeleting(true);
@@ -80,24 +118,15 @@ const TransactionHistory = () => {
             const token = localStorage.getItem('token');
             await voidTransaction(deleteTarget.id, adminPassword, token);
             setDeleteModalOpen(false);
-            fetchTransactions(); // Refresh list
+            await fetchTransactions();
         } catch (err) {
-            setDeleteError(err.response?.data?.error || '刪除失敗');
+            setDeleteError(axiosErrorDetail(err, DELETE_VOID_FAILED));
         } finally {
             setIsDeleting(false);
         }
     };
 
-    const filteredTransactions = transactions.filter(t =>
-        t.barcode?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        t.item_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        t.location_code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        t.employee_id?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        t.user_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        t.deleter_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        t.deleter_id?.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-
+    const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
     const canDelete = user?.group_name === '管理者' || (user?.permissions && user.permissions.includes('ALL'));
 
     return (
@@ -152,12 +181,12 @@ const TransactionHistory = () => {
                                 <tr>
                                     <td colSpan={canDelete ? 8 : 7} className="p-8 text-center text-gray-500">載入中...</td>
                                 </tr>
-                            ) : filteredTransactions.length === 0 ? (
+                            ) : transactions.length === 0 ? (
                                 <tr>
                                     <td colSpan={canDelete ? 8 : 7} className="p-8 text-center text-gray-500">無符合的紀錄</td>
                                 </tr>
                             ) : (
-                                filteredTransactions.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map((t) => (
+                                transactions.map((t) => (
                                     <tr key={t.id} className={clsx("hover:bg-gray-700/30 transition-colors group", t.is_deleted && "opacity-50 bg-red-900/10")}>
                                         <td className="p-4 text-gray-300 whitespace-nowrap text-sm">
                                             {new Date(t.timestamp + (t.timestamp.includes('Z') ? '' : 'Z')).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false })}
@@ -221,11 +250,11 @@ const TransactionHistory = () => {
             </div>
 
             {/* Pagination Controls */}
-            {filteredTransactions.length > itemsPerPage && (
+            {(totalCount > itemsPerPage || currentPage > 1) && (
                 <div className="flex justify-between items-center bg-gray-800 p-4 rounded-xl border border-gray-700 mt-4">
                     <span className="text-gray-400">
-                        顯示第 {(currentPage - 1) * itemsPerPage + 1} 到 {Math.min(currentPage * itemsPerPage, filteredTransactions.length)} 筆，
-                        共 <span className="font-bold text-white">{filteredTransactions.length}</span> 筆
+                        顯示第 {totalCount === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} 到 {Math.min(currentPage * itemsPerPage, totalCount)} 筆，
+                        共 <span className="font-bold text-white">{totalCount}</span> 筆（伺服器篩選）
                     </span>
                     <div className="flex gap-2">
                         <button
@@ -236,10 +265,10 @@ const TransactionHistory = () => {
                             上一頁
                         </button>
                         <span className="px-4 py-2 bg-gray-900 rounded-lg text-blue-400 font-bold border border-gray-700">
-                            {currentPage} / {Math.ceil(filteredTransactions.length / itemsPerPage)}
+                            {currentPage} / {totalPages}
                         </span>
                         <button
-                            disabled={currentPage === Math.ceil(filteredTransactions.length / itemsPerPage)}
+                            disabled={currentPage >= totalPages || totalCount === 0}
                             onClick={() => setCurrentPage(prev => prev + 1)}
                             className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-white font-bold transition-colors"
                         >
@@ -300,7 +329,7 @@ const TransactionHistory = () => {
                                         </label>
                                         <div className="relative">
                                             <input
-                                                type={showPassword ? "text" : "password"}
+                                                type={showPassword ? 'text' : 'password'}
                                                 className="w-full bg-gray-800 border border-gray-600 text-white px-4 py-2 rounded-lg focus:ring-2 focus:ring-red-500 outline-none pr-10"
                                                 value={adminPassword}
                                                 onChange={(e) => setAdminPassword(e.target.value)}

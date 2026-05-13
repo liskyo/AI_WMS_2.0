@@ -5,6 +5,7 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const XLSX = require('xlsx');
 const fs = require('fs');
+const { bi, userFacingCatch } = require('./utils/apiErrors');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -18,7 +19,19 @@ app.use(express.static(path.join(__dirname, '../client/dist')));
 
 // Database Setup
 const dbPath = path.join(__dirname, 'warehouse.db');
-const db = new Database(dbPath/*, { verbose: console.log } */); // Disable verbose for performance
+let db;
+try {
+  db = new Database(dbPath);
+} catch (openErr) {
+  const statTry = fs.existsSync(dbPath) ? fs.statSync(dbPath).isDirectory() : false;
+  console.error('[FATAL] 無法開啟資料庫 warehouse.db:', openErr.message || openErr);
+  if (statTry) {
+    console.error('[FATAL] 偵測到 warehouse.db 是「資料夾」而非檔案。Docker bind mount 在主機無此檔案時會自動建立資料夾。');
+    console.error('        請刪除此資料夾後改為複製正式的 .db 檔（或可先 touch 成一個空的檔案再啟動讓程式建立表）：');
+    console.error(`        例：rm -rf "${dbPath}" && touch "${dbPath}"  （或由備份拷貝 restore）`);
+  }
+  process.exit(1);
+}
 
 // Initialize Database
 const initDb = () => {
@@ -98,8 +111,6 @@ const initDb = () => {
     `).run('admin', 'Admin User', 'IT', '管理者', JSON.stringify(['ALL']), 'admin@example.com', 'admin123');
     console.log('Default admin user created.');
   }
-  db.exec(createTables);
-  console.log('Database initialized.');
 
   // Seed Locations if empty
   const locationCount = db.prepare('SELECT count(*) as count FROM locations').get();
@@ -168,6 +179,18 @@ const initDb = () => {
     }
   } catch (err) {
     console.warn('Migration specific error:', err);
+  }
+
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_inventory_item_id ON inventory(item_id);
+      CREATE INDEX IF NOT EXISTS idx_inventory_location_id ON inventory(location_id);
+      CREATE INDEX IF NOT EXISTS idx_bom_main_barcode ON bom_items(main_barcode);
+      CREATE INDEX IF NOT EXISTS idx_transactions_ts ON transactions(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_transactions_item ON transactions(item_id);
+    `);
+  } catch (idxErr) {
+    console.warn('Index creation note:', idxErr.message);
   }
 };
 
@@ -279,16 +302,26 @@ app.get('/api/locations', (req, res) => {
     res.json(Array.from(locationMap.values()));
   } catch (err) {
     console.error('Error fetching locations:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: userFacingCatch(err.message) });
   }
 });
 
 // 2. Get Items (Search)
 app.get('/api/items', (req, res) => {
-  const { q } = req.query; // Keyword search
+  const { q } = req.query;
+  const summary = req.query.summary === '1' || req.query.summary === 'true';
 
-  // Base query with location aggregation
-  let baseQuery = `
+  let baseQuery;
+  if (summary) {
+    baseQuery = `
+        SELECT 
+            i.*, 
+            IFNULL(SUM(inv.quantity), 0) as total_quantity
+        FROM items i
+        LEFT JOIN inventory inv ON i.id = inv.item_id AND inv.quantity > 0
+    `;
+  } else {
+    baseQuery = `
         SELECT 
             i.*, 
             IFNULL(SUM(inv.quantity), 0) as total_quantity,
@@ -297,6 +330,7 @@ app.get('/api/items', (req, res) => {
         LEFT JOIN inventory inv ON i.id = inv.item_id AND inv.quantity > 0
         LEFT JOIN locations l ON inv.location_id = l.id
     `;
+  }
 
   if (q) {
     const query = `
@@ -309,7 +343,7 @@ app.get('/api/items', (req, res) => {
       const items = db.prepare(query).all(wildcard, wildcard, wildcard);
       return res.json(items);
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: userFacingCatch(err.message) });
     }
   }
 
@@ -322,7 +356,7 @@ app.get('/api/items', (req, res) => {
     const items = db.prepare(query).all();
     res.json(items);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: userFacingCatch(err.message) });
   }
 });
 
@@ -331,7 +365,7 @@ app.get('/api/items/:barcode', (req, res) => {
   const { barcode } = req.params;
   const item = db.prepare('SELECT * FROM items WHERE barcode = ?').get(barcode);
 
-  if (!item) return res.status(404).json({ error: 'Item not found' });
+  if (!item) return res.status(404).json({ error: bi('找不到料件', 'Item not found') });
 
   const inventory = db.prepare(`
         SELECT inv.*, l.code as location_code, l.x, l.y
@@ -349,7 +383,7 @@ app.get('/api/locations/:code/inventory', (req, res) => {
   const { code } = req.params;
   try {
     const location = db.prepare('SELECT * FROM locations WHERE code = ?').get(code);
-    if (!location) return res.status(404).json({ error: 'Location not found' });
+    if (!location) return res.status(404).json({ error: bi('找不到儲位', 'Location not found') });
 
     const inventory = db.prepare(`
       SELECT 
@@ -368,7 +402,7 @@ app.get('/api/locations/:code/inventory', (req, res) => {
     res.json({ location, inventory });
   } catch (err) {
     console.error('Error fetching location inventory:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: userFacingCatch(err.message) });
   }
 });
 
@@ -376,8 +410,8 @@ app.get('/api/locations/:code/inventory', (req, res) => {
 app.post('/api/transaction', (req, res) => {
   const { type, barcode, location_code, quantity, ref_order } = req.body;
 
-  if (!['IN', 'OUT'].includes(type)) return res.status(400).json({ error: 'Invalid type' });
-  if (!barcode || !location_code || !quantity) return res.status(400).json({ error: 'Missing fields' });
+  if (!['IN', 'OUT'].includes(type)) return res.status(400).json({ error: bi('無效的交易類型', 'Invalid transaction type') });
+  if (!barcode || !location_code || !quantity) return res.status(400).json({ error: bi('缺少必要欄位', 'Missing required fields') });
 
   // Identify User from Token (Optional but recommended for logging)
   let userId = null;
@@ -397,7 +431,7 @@ app.post('/api/transaction', (req, res) => {
       // 1. Find or Create Item (only for IN, strictly speaking, but handy to query)
       let item = db.prepare('SELECT * FROM items WHERE barcode = ?').get(barcode);
       if (!item) {
-        if (type === 'OUT') throw new Error('Item not found for outbound');
+        if (type === 'OUT') throw new Error(bi('出庫時找不到該料件', 'Item not found — cannot outbound'));
         // Auto-create item for inbound if not exists (simplification)
         const info = db.prepare('INSERT INTO items (barcode, name) VALUES (?, ?)').run(barcode, `Item ${barcode}`);
         item = { id: info.lastInsertRowid, barcode };
@@ -405,8 +439,8 @@ app.post('/api/transaction', (req, res) => {
 
       // 2. Find Location
       const location = db.prepare('SELECT * FROM locations WHERE code = ?').get(location_code);
-      if (!location) throw new Error('Location not found');
-      if (location.is_closed) throw new Error(`儲位 ${location_code} 已關閉：${location.closed_reason || '無說明'}`);
+      if (!location) throw new Error(bi('找不到儲位', 'Location not found'));
+      if (location.is_closed) throw new Error(bi(`儲位 ${location_code} 已關閉：${location.closed_reason || '無說明'}`, `Location ${location_code} is closed: ${location.closed_reason || '(no note)'}`));
 
       // 3. Update Inventory
       const existingInv = db.prepare('SELECT * FROM inventory WHERE item_id = ? AND location_id = ?').get(item.id, location.id);
@@ -416,7 +450,7 @@ app.post('/api/transaction', (req, res) => {
         newQty += parseFloat(quantity);
       } else {
         newQty -= parseFloat(quantity);
-        if (newQty < 0) throw new Error('Insufficient inventory');
+        if (newQty < 0) throw new Error(bi('庫存不足', 'Insufficient inventory'));
       }
 
       if (existingInv) {
@@ -440,7 +474,7 @@ app.post('/api/transaction', (req, res) => {
 
     res.json(result);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: userFacingCatch(err.message) });
   }
 });
 
@@ -461,7 +495,7 @@ app.post('/api/items', (req, res) => {
     stmt.run(barcode, name, description, category, unit, safe_stock || 0);
     res.json({ success: true });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: userFacingCatch(err.message) });
   }
 });
 
@@ -473,11 +507,11 @@ app.patch('/api/items/:barcode/safe-stock', (req, res) => {
     const stmt = db.prepare('UPDATE items SET safe_stock = ? WHERE barcode = ?');
     const info = stmt.run(safe_stock || 0, barcode);
     if (info.changes === 0) {
-      return res.status(404).json({ error: 'Item not found' });
+      return res.status(404).json({ error: bi('找不到料件', 'Item not found') });
     }
     res.json({ success: true });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: userFacingCatch(err.message) });
   }
 });
 
@@ -504,15 +538,43 @@ app.get('/api/reports/inventory', (req, res) => {
     res.json(report);
   } catch (err) {
     console.error('Error fetching report:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: userFacingCatch(err.message) });
   }
 });
 
-// 6.5 Get Transaction History
+// 6.5 Get Transaction History (paginated + optional keyword)
 app.get('/api/transactions', (req, res) => {
   try {
     res.set('Cache-Control', 'no-store');
-    const query = `
+    const rawLimit = parseInt(req.query.limit, 10);
+    const rawOffset = parseInt(req.query.offset, 10);
+    const limitCap = rawLimit > 0 ? Math.min(rawLimit, 25000) : 100;
+    const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+    const q = (req.query.q || '').trim();
+    const wild = q ? `%${q}%` : null;
+
+    const baseFrom = `
+            FROM transactions t
+            JOIN items i ON t.item_id = i.id
+            JOIN locations l ON t.location_id = l.id
+            LEFT JOIN users u ON t.user_id = u.id
+            LEFT JOIN users u_del ON t.deleted_by = u_del.id
+        `;
+    const whereClause = q
+      ? `WHERE (
+            i.barcode LIKE ? OR i.name LIKE ? OR l.code LIKE ?
+            OR IFNULL(u.employee_id, '') LIKE ? OR IFNULL(u.name, '') LIKE ?
+            OR IFNULL(u_del.name, '') LIKE ? OR IFNULL(u_del.employee_id, '') LIKE ?
+          )`
+      : '';
+
+    const countSql = `SELECT COUNT(*) as cnt ${baseFrom} ${whereClause}`;
+    const countRow = q
+      ? db.prepare(countSql).get(wild, wild, wild, wild, wild, wild, wild)
+      : db.prepare(countSql).get();
+    const total = countRow.cnt;
+
+    const dataSql = `
             SELECT 
                 t.id,
                 t.timestamp,
@@ -526,18 +588,19 @@ app.get('/api/transactions', (req, res) => {
                 u.name as user_name,
                 u_del.name as deleter_name,
                 u_del.employee_id as deleter_id
-            FROM transactions t
-            JOIN items i ON t.item_id = i.id
-            JOIN locations l ON t.location_id = l.id
-            LEFT JOIN users u ON t.user_id = u.id
-            LEFT JOIN users u_del ON t.deleted_by = u_del.id
+            ${baseFrom}
+            ${whereClause}
             ORDER BY t.timestamp DESC
+            LIMIT ? OFFSET ?
         `;
-    const history = db.prepare(query).all();
-    res.json(history);
+    const history = q
+      ? db.prepare(dataSql).all(wild, wild, wild, wild, wild, wild, wild, limitCap, offset)
+      : db.prepare(dataSql).all(limitCap, offset);
+
+    res.json({ items: history, total, limit: limitCap, offset });
   } catch (err) {
     console.error('Error fetching transactions:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: userFacingCatch(err.message) });
   }
 });
 
@@ -577,14 +640,14 @@ app.post('/api/admin/login', (req, res) => {
       }
     });
   } else {
-    res.status(401).json({ error: '無效的帳號或密碼' });
+    res.status(401).json({ error: bi('無效的帳號或密碼', 'Invalid account or password') });
   }
 });
 
 // Middleware for Admin Check (Updated)
 const requireAdmin = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  if (!authHeader) return res.status(401).json({ error: 'Unauthorized' });
+  if (!authHeader) return res.status(401).json({ error: bi('未授權，請先登入', 'Unauthorized — please sign in') });
 
   const token = authHeader.split(' ')[1];
   if (token === 'mock-admin-token') return next(); // Legacy/Fallback
@@ -595,10 +658,10 @@ const requireAdmin = (req, res, next) => {
       req.user = payload;
       next();
     } else {
-      res.status(403).json({ error: 'Forbidden' });
+      res.status(403).json({ error: bi('禁止存取', 'Forbidden — admin access required') });
     }
   } catch (e) {
-    res.status(401).json({ error: 'Invalid Token' });
+    res.status(401).json({ error: bi('登入憑證無效或已過期', 'Invalid or expired login token') });
   }
 };
 
@@ -619,7 +682,7 @@ app.post('/api/users', requireAdmin, (req, res) => {
         `).run(employee_id, name, unit, group_name, JSON.stringify(permissions), email, password);
     res.json({ success: true });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: userFacingCatch(err.message) });
   }
 });
 
@@ -644,7 +707,7 @@ app.put('/api/users/:id', requireAdmin, (req, res) => {
 
 app.delete('/api/users/:id', requireAdmin, (req, res) => {
   const { id } = req.params;
-  if (id == 1) return res.status(400).json({ error: "Cannot delete default admin" }); // Protect default admin
+  if (id == 1) return res.status(400).json({ error: bi('無法刪除預設管理員', 'Cannot delete default admin account') });
   db.prepare('DELETE FROM users WHERE id = ?').run(id);
   res.json({ success: true });
 });
@@ -657,11 +720,11 @@ app.post('/api/admin/transactions/:id/void', (req, res) => {
   const { id } = req.params;
   const { password } = req.body;
 
-  if (!password) return res.status(400).json({ error: 'Password required' });
+  if (!password) return res.status(400).json({ error: bi('需要輸入密碼確認', 'Password verification required') });
 
   // 1. Identify User (Admin check)
   const authHeader = req.headers['authorization'];
-  if (!authHeader) return res.status(401).json({ error: 'Unauthorized' });
+  if (!authHeader) return res.status(401).json({ error: bi('未授權，請先登入', 'Unauthorized — please sign in') });
   const token = authHeader.split(' ')[1];
 
   let userId;
@@ -669,23 +732,23 @@ app.post('/api/admin/transactions/:id/void', (req, res) => {
     const payload = JSON.parse(Buffer.from(token, 'base64').toString('utf-8'));
     userId = payload.id;
   } catch (e) {
-    return res.status(401).json({ error: 'Invalid Token' });
+    return res.status(401).json({ error: bi('登入憑證無效或已過期', 'Invalid or expired login token') });
   }
 
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-  if (!user) return res.status(401).json({ error: 'User not found' });
+  if (!user) return res.status(401).json({ error: bi('找不到使用者登入紀錄', 'User session not found') });
 
   const permissions = JSON.parse(user.permissions || '[]');
   const isAdmin = user.group_name === '管理者' || permissions.includes('ALL');
 
-  if (!isAdmin) return res.status(403).json({ error: '權限不足' });
-  if (user.password !== password) return res.status(403).json({ error: '密碼錯誤' });
+  if (!isAdmin) return res.status(403).json({ error: bi('權限不足', 'Insufficient permission') });
+  if (user.password !== password) return res.status(403).json({ error: bi('密碼錯誤', 'Incorrect password') });
 
   try {
     const result = db.transaction(() => {
       const tx = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
-      if (!tx) throw new Error('Transaction not found');
-      if (tx.is_deleted) throw new Error('Transaction already voided');
+      if (!tx) throw new Error(bi('找不到該筆交易紀錄', 'Transaction not found'));
+      if (tx.is_deleted) throw new Error(bi('此交易已作廢', 'Transaction already voided'));
 
       // Find current inventory
       const inv = db.prepare('SELECT * FROM inventory WHERE item_id = ? AND location_id = ?').get(tx.item_id, tx.location_id);
@@ -697,14 +760,14 @@ app.post('/api/admin/transactions/:id/void', (req, res) => {
           db.prepare('INSERT INTO inventory (item_id, location_id, quantity) VALUES (?, ?, ?)').run(tx.item_id, tx.location_id, tx.quantity);
         } else {
           // Revert IN -> Remove. If no record, implies 0. 0 - qty = negative.
-          throw new Error('Cannot revert inbound transaction: Inventory record missing (would result in negative quantity)');
+          throw new Error(bi('無法還原此入庫紀錄：缺少庫存列且會導致負庫存', 'Cannot revert this inbound — missing inventory row (would go negative)'));
         }
       } else {
         let newQty = inv.quantity;
         if (tx.type === 'IN') {
           // Revert IN: Remove quantity
           newQty -= tx.quantity;
-          if (newQty < 0) throw new Error('Insufficient inventory to revert this transaction');
+          if (newQty < 0) throw new Error(bi('庫存不足，無法作廢此入庫紀錄', 'Insufficient inventory to void this inbound record'));
         } else {
           // Revert OUT: Add quantity back
           newQty += tx.quantity;
@@ -720,7 +783,7 @@ app.post('/api/admin/transactions/:id/void', (req, res) => {
     })();
     res.json(result);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: userFacingCatch(err.message) });
   }
 });
 
@@ -733,12 +796,12 @@ app.delete('/api/admin/items/:barcode', (req, res) => {
 
   if (!password) {
     console.log('[DELETE ITEM] Error: Password required');
-    return res.status(400).json({ error: 'Password required' });
+    return res.status(400).json({ error: bi('需要輸入密碼確認', 'Password verification required') });
   }
 
   // 1. Identify User from Token
   const authHeader = req.headers['authorization'];
-  if (!authHeader) return res.status(401).json({ error: 'Unauthorized' });
+  if (!authHeader) return res.status(401).json({ error: bi('未授權，請先登入', 'Unauthorized — please sign in') });
   const token = authHeader.split(' ')[1];
 
   let userId;
@@ -747,14 +810,14 @@ app.delete('/api/admin/items/:barcode', (req, res) => {
     userId = payload.id;
   } catch (e) {
     console.log('[DELETE ITEM] Error: Invalid Token');
-    return res.status(401).json({ error: 'Invalid Token' });
+    return res.status(401).json({ error: bi('登入憑證無效或已過期', 'Invalid or expired login token') });
   }
 
   // 2. Refresh User Data from DB (Source of Truth)
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
   if (!user) {
     console.log('[DELETE ITEM] Error: User not found in DB');
-    return res.status(401).json({ error: 'User not found' });
+    return res.status(401).json({ error: bi('找不到使用者登入紀錄', 'User session not found') });
   }
 
   // 3. Verify Admin Permission
@@ -763,25 +826,25 @@ app.delete('/api/admin/items/:barcode', (req, res) => {
 
   if (!isAdmin) {
     console.log(`[DELETE ITEM] Error: User ${user.name} is not admin`);
-    return res.status(403).json({ error: '權限不足：僅管理者可刪除' });
+    return res.status(403).json({ error: bi('權限不足：僅管理者可刪除', 'Insufficient permission — only administrators may delete items') });
   }
 
   // 4. Verify Password (User's own password)
   if (user.password !== password) {
     console.log(`[DELETE ITEM] Error: Password mismatch for user ${user.name}`);
-    return res.status(403).json({ error: '密碼錯誤' });
+    return res.status(403).json({ error: bi('密碼錯誤', 'Incorrect password') });
   }
 
   try {
     const result = db.transaction(() => {
       const item = db.prepare('SELECT id FROM items WHERE barcode = ?').get(barcode);
-      if (!item) throw new Error('Item not found');
+      if (!item) throw new Error(bi('找不到料件', 'Item not found'));
 
       // Check Total Quantity
       const qtyCheck = db.prepare('SELECT SUM(quantity) as total FROM inventory WHERE item_id = ?').get(item.id);
       if (qtyCheck && qtyCheck.total > 0) {
         console.log(`[DELETE ITEM] Error: Item ${barcode} has quantity ${qtyCheck.total}`);
-        throw new Error('Cannot delete item with remaining inventory');
+        throw new Error(bi('尚有庫存之料件不可刪除', 'Cannot delete item that still has on-hand inventory'));
       }
 
       // Delete Transactions (Cascading delete to resolve FK constraint)
@@ -800,14 +863,14 @@ app.delete('/api/admin/items/:barcode', (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[DELETE ITEM] Transaction Error:', err.message);
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: userFacingCatch(err.message) });
   }
 });
 
 // 8. Import Items
 app.post('/api/admin/import/items', requireAdmin, (req, res) => {
   const { items } = req.body; // Expects array of { barcode, name, category, description }
-  if (!Array.isArray(items)) return res.status(400).json({ error: 'Invalid format' });
+  if (!Array.isArray(items)) return res.status(400).json({ error: bi('請求資料格式無效', 'Invalid request body format — expected items array') });
 
   try {
     const processItems = db.transaction((data) => {
@@ -860,14 +923,14 @@ app.post('/api/admin/import/items', requireAdmin, (req, res) => {
     res.json({ success: true, count: items.length, deleted: result.deletedCount });
   } catch (err) {
     console.error('Import Items Error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: userFacingCatch(err.message) });
   }
 });
 
 // 9. Import Inventory
 app.post('/api/admin/import/inventory', requireAdmin, (req, res) => {
   const { inventory } = req.body; // Expects array of { barcode, location_code, quantity }
-  if (!Array.isArray(inventory)) return res.status(400).json({ error: 'Invalid format' });
+  if (!Array.isArray(inventory)) return res.status(400).json({ error: bi('請求資料格式無效', 'Invalid request body format — expected inventory array') });
 
   try {
     const processImport = db.transaction((data) => {
@@ -901,14 +964,14 @@ app.post('/api/admin/import/inventory', requireAdmin, (req, res) => {
     res.json({ success: true, count: inventory.length });
   } catch (err) {
     console.error('Import Inventory Error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: userFacingCatch(err.message) });
   }
 });
 
 // 9.5 Import Locations (Map)
 app.post('/api/admin/import/locations', requireAdmin, (req, res) => {
   const { locations, floorName = '新大樓4樓' } = req.body; // Expects array of { code, x, y } directly
-  if (!Array.isArray(locations)) return res.status(400).json({ error: 'Invalid format' });
+  if (!Array.isArray(locations)) return res.status(400).json({ error: bi('請求資料格式無效', 'Invalid request body format — expected locations array') });
 
   try {
     const processLocations = db.transaction((locs) => {
@@ -974,21 +1037,21 @@ app.post('/api/admin/import/locations', requireAdmin, (req, res) => {
     res.json({ success: true, count: result.insertedCount + result.updatedCount, details: result });
   } catch (err) {
     console.error('Import Locations Error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: userFacingCatch(err.message) });
   }
 });
 
 // 9.6 Rename Floor
 app.put('/api/admin/locations/floor', requireAdmin, (req, res) => {
   const { oldName, newName } = req.body;
-  if (!oldName || !newName) return res.status(400).json({ error: 'Missing oldName or newName' });
+  if (!oldName || !newName) return res.status(400).json({ error: bi('缺少 oldName 或 newName', 'Missing oldName or newName') });
 
   try {
     const info = db.prepare('UPDATE locations SET floor = ? WHERE floor = ?').run(newName, oldName);
     res.json({ success: true, count: info.changes });
   } catch (err) {
     console.error('Rename Floor Error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: userFacingCatch(err.message) });
   }
 });
 
@@ -999,7 +1062,7 @@ app.patch('/api/admin/locations/:id/toggle-close', requireAdmin, (req, res) => {
 
   try {
     const location = db.prepare('SELECT * FROM locations WHERE id = ?').get(id);
-    if (!location) return res.status(404).json({ error: 'Location not found' });
+    if (!location) return res.status(404).json({ error: bi('找不到儲位', 'Location not found') });
 
     db.prepare('UPDATE locations SET is_closed = ?, closed_reason = ? WHERE id = ?').run(
       is_closed ? 1 : 0,
@@ -1010,7 +1073,7 @@ app.patch('/api/admin/locations/:id/toggle-close', requireAdmin, (req, res) => {
     res.json({ success: true, code: location.code, is_closed: !!is_closed });
   } catch (err) {
     console.error('Toggle Location Close Error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: userFacingCatch(err.message) });
   }
 });
 
@@ -1019,7 +1082,7 @@ app.patch('/api/admin/locations/:id/toggle-close', requireAdmin, (req, res) => {
 // 10. Import BOM
 app.post('/api/admin/import/bom', requireAdmin, (req, res) => {
   const { bomData } = req.body; // Expects array of { main_barcode, component_barcode, required_qty }
-  if (!Array.isArray(bomData)) return res.status(400).json({ error: 'Invalid format' });
+  if (!Array.isArray(bomData)) return res.status(400).json({ error: bi('請求資料格式無效', 'Invalid request body format — expected bomData array') });
 
   try {
     const processBom = db.transaction((data) => {
@@ -1045,55 +1108,81 @@ app.post('/api/admin/import/bom', requireAdmin, (req, res) => {
     res.json({ success: true, count: bomData.length });
   } catch (err) {
     console.error('Import BOM Error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: userFacingCatch(err.message) });
   }
 });
 
-// 11. Get BOM List with Inventory
+// 11. Get BOM List with Inventory (batched queries — avoids N+1 per main)
 app.get('/api/bom', (req, res) => {
   const { main_barcode } = req.query;
   try {
-    let mainItems = [];
-    if (main_barcode) {
-      mainItems = db.prepare('SELECT DISTINCT main_barcode FROM bom_items WHERE main_barcode LIKE ?').all(`%${main_barcode}%`);
-    } else {
-      mainItems = db.prepare('SELECT DISTINCT main_barcode FROM bom_items').all();
-    }
-
-    const results = mainItems.map(m => {
-      const components = db.prepare(`
-        SELECT 
-          b.component_barcode, 
-          b.required_qty, 
-          i.name as component_name,
-          i.description,
-          i.safe_stock,
-          (SELECT IFNULL(SUM(quantity), 0) FROM inventory WHERE item_id = i.id) as current_stock,
-          (
-             SELECT GROUP_CONCAT(l.code || ':' || loc_stock.qty)
-             FROM (
-                SELECT location_id, SUM(quantity) as qty
-                FROM inventory
-                WHERE item_id = i.id
-                GROUP BY location_id
-             ) loc_stock
-             JOIN locations l ON l.id = loc_stock.location_id
-          ) as locations
+    const rows = main_barcode
+      ? db.prepare(`
+        SELECT b.main_barcode, b.component_barcode, b.required_qty,
+               i.name as component_name, i.description, i.safe_stock, i.id as component_item_id
         FROM bom_items b
         LEFT JOIN items i ON b.component_barcode = i.barcode
-        WHERE b.main_barcode = ?
-      `).all(m.main_barcode);
+        WHERE b.main_barcode LIKE ?
+        ORDER BY b.main_barcode, b.component_barcode
+      `).all(`%${main_barcode}%`)
+      : db.prepare(`
+        SELECT b.main_barcode, b.component_barcode, b.required_qty,
+               i.name as component_name, i.description, i.safe_stock, i.id as component_item_id
+        FROM bom_items b
+        LEFT JOIN items i ON b.component_barcode = i.barcode
+        ORDER BY b.main_barcode, b.component_barcode
+      `).all();
 
-      return {
-        main_barcode: m.main_barcode,
-        components: components
-      };
-    });
+    const itemIds = [...new Set(rows.map((r) => r.component_item_id).filter(Boolean))];
+    const stockByItem = new Map();
+    const locStrings = new Map();
 
+    if (itemIds.length > 0) {
+      const ph = itemIds.map(() => '?').join(',');
+      const stocks = db.prepare(`
+        SELECT item_id, IFNULL(SUM(quantity), 0) as total
+        FROM inventory WHERE item_id IN (${ph}) GROUP BY item_id
+      `).all(...itemIds);
+      for (const s of stocks) stockByItem.set(s.item_id, s.total);
+
+      const locRows = db.prepare(`
+        SELECT inv.item_id, l.code, SUM(inv.quantity) as qty
+        FROM inventory inv
+        JOIN locations l ON inv.location_id = l.id
+        WHERE inv.quantity > 0 AND inv.item_id IN (${ph})
+        GROUP BY inv.item_id, l.code
+      `).all(...itemIds);
+
+      const partsByItem = new Map();
+      for (const lr of locRows) {
+        if (!partsByItem.has(lr.item_id)) partsByItem.set(lr.item_id, []);
+        partsByItem.get(lr.item_id).push(`${lr.code}:${lr.qty}`);
+      }
+      for (const [id, parts] of partsByItem) {
+        locStrings.set(id, parts.sort().join(','));
+      }
+    }
+
+    const byMain = new Map();
+    for (const r of rows) {
+      if (!byMain.has(r.main_barcode)) byMain.set(r.main_barcode, []);
+      const itemId = r.component_item_id;
+      byMain.get(r.main_barcode).push({
+        component_barcode: r.component_barcode,
+        required_qty: r.required_qty,
+        component_name: r.component_name,
+        description: r.description,
+        safe_stock: r.safe_stock,
+        current_stock: itemId ? (stockByItem.get(itemId) ?? 0) : 0,
+        locations: itemId ? (locStrings.get(itemId) || '') : ''
+      });
+    }
+
+    const results = [...byMain.entries()].map(([mb, components]) => ({ main_barcode: mb, components }));
     res.json(results);
   } catch (err) {
     console.error('Get BOM Error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: userFacingCatch(err.message) });
   }
 });
 
@@ -1101,7 +1190,7 @@ app.get('/api/bom', (req, res) => {
 app.post('/api/transactions/bom-out', (req, res) => {
   const { main_barcode, sets, staged_picks, ref_order } = req.body;
   if (!main_barcode || !staged_picks || !Array.isArray(staged_picks) || staged_picks.length === 0) {
-    return res.status(400).json({ error: 'Invalid parameters: staged_picks is required' });
+    return res.status(400).json({ error: bi('參數無效：請提供 staged_picks 陣列', 'Invalid parameters: staged_picks array is required') });
   }
 
   // Token verify for user_id logging
@@ -1124,18 +1213,18 @@ app.post('/api/transactions/bom-out', (req, res) => {
 
         // 1. Find Item ID
         const item = db.prepare('SELECT id, name FROM items WHERE barcode = ?').get(pick.barcode);
-        if (!item) throw new Error(`Component item not found: ${pick.barcode}`);
+        if (!item) throw new Error(bi(`找不到元件料號：${pick.barcode}`, `Component item not found: ${pick.barcode}`));
 
         // 2. Find Location ID
         const location = db.prepare('SELECT * FROM locations WHERE code = ?').get(pick.location_code);
-        if (!location) throw new Error(`Location not found: ${pick.location_code}`);
-        if (location.is_closed) throw new Error(`儲位 ${pick.location_code} 已關閉：${location.closed_reason || '無說明'}`);
+        if (!location) throw new Error(bi(`找不到儲位：${pick.location_code}`, `Location not found: ${pick.location_code}`));
+        if (location.is_closed) throw new Error(bi(`儲位 ${pick.location_code} 已關閉：${location.closed_reason || '無說明'}`, `Location ${pick.location_code} is closed: ${location.closed_reason || '(no note)'}`));
 
         // 3. Find and verify existing inventory
         const existingInv = db.prepare('SELECT * FROM inventory WHERE item_id = ? AND location_id = ?').get(item.id, location.id);
         const existingQty = existingInv ? existingInv.quantity : 0;
         if (existingQty < qty) {
-          throw new Error(`庫存不足: 元件 ${pick.barcode} 於儲位 ${pick.location_code} 僅有 ${existingQty}, 試圖扣除 ${qty}`);
+          throw new Error(bi(`庫存不足：元件 ${pick.barcode} 於儲位 ${pick.location_code} 僅有 ${existingQty}，試圖扣除 ${qty}`, `Insufficient stock: barcode ${pick.barcode} at ${pick.location_code} has ${existingQty}, cannot deduct ${qty}`));
         }
 
         // 4. Update Inventory
@@ -1166,7 +1255,7 @@ app.post('/api/transactions/bom-out', (req, res) => {
 
   } catch (err) {
     console.error('BOM Outbound Error:', err.message);
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: userFacingCatch(err.message) });
   }
 });
 

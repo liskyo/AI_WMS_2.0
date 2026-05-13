@@ -1,5 +1,4 @@
-version: '3.8'
-
+# `version:` 已由新版 Compose 視為過時並忽略，請勿再加回以避免警告。
 services:
   app:
     image: wms-app-prod

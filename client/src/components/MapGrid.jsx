@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Lock, Unlock, AlertTriangle } from 'lucide-react';
+import { OPERATION_FAILED, axiosErrorDetail } from '../userFacingMessages';
 
 const MapGrid = ({ highlights = null, activeFloor = null }) => {
     const [locations, setLocations] = useState([]);
@@ -112,13 +113,13 @@ const MapGrid = ({ highlights = null, activeFloor = null }) => {
             await fetchData(); // Refresh
             setModal(null);
         } catch (err) {
-            alert(err.response?.data?.error || '操作失敗');
+            alert(axiosErrorDetail(err, OPERATION_FAILED));
         } finally {
             setModalLoading(false);
         }
     };
 
-    if (loading) return <div className="text-white">Loading Map...</div>;
+    if (loading) return <div className="text-white">載入地圖中 Loading map…</div>;
 
     return (
         <>

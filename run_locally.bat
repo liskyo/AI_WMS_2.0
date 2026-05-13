@@ -1,5 +1,6 @@
 @echo off
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
+cd /d "%~dp0"
 
 :: Read from config file if exists
 if exist ".node_path" (
@@ -25,21 +26,19 @@ if exist "%ProgramFiles(x86)%\nodejs\node.exe" (
     goto save_node_path
 )
 
-:: Prompt the user since we can't find it
-echo [Warning] Node.js not found in standard PATH or common locations.
-echo Please enter the full path to the folder containing node.exe
-set /p CUSTOM_NODE_PATH="Path (e.g., %USERPROFILE%\node) : "
+echo [Warning / 警告] Node.js not found in PATH or common folders.  ^|  在 PATH 或常見安裝路徑找不到 Node.js。
+echo Please enter the folder path that contains node.exe  ^|  請輸入含 node.exe 的資料夾完整路徑
+set /p CUSTOM_NODE_PATH="Path (e.g. %USERPROFILE%\node) : "
 if "%CUSTOM_NODE_PATH%"=="" (
-    echo No path entered. Exiting.
+    echo No path entered. Exiting.  ^|  未輸入路徑，結束。
     pause
     exit /b
 )
 
-:: Trim quotes if the user dragged and dropped a folder
 set CUSTOM_NODE_PATH=%CUSTOM_NODE_PATH:"=%
 
 if not exist "%CUSTOM_NODE_PATH%\node.exe" (
-    echo node.exe not found in %CUSTOM_NODE_PATH%. Please check the path and try again.
+    echo node.exe not found in %CUSTOM_NODE_PATH%. Check path.  ^|  路徑中找不到 node.exe，請檢查。
     pause
     exit /b
 )
@@ -47,33 +46,61 @@ if not exist "%CUSTOM_NODE_PATH%\node.exe" (
 :save_node_path
 echo %CUSTOM_NODE_PATH%> .node_path
 set "PATH=%CUSTOM_NODE_PATH%;%PATH%"
-echo [Success] Configured Node.js at %CUSTOM_NODE_PATH% and saved to .node_path for future use.
+echo [Success / 完成] Saved Node folder to .node_path  ^|  已將 Node 路徑寫入 .node_path：%CUSTOM_NODE_PATH%
 
 :node_found
-echo Checking Node.js version...
+echo Checking Node.js version...  ^|  檢查 Node.js 版本…
 node -v
+for /f "delims=" %%V in ('node -p "process.version"') do set "NODE_FULL=%%V"
 
 if not exist "server\node_modules" (
-    echo Installing Server Dependencies...
+    echo Installing server dependencies... ^|  正在安裝後端套件…
     cd server
     call npm install
     cd ..
 )
 
 if not exist "client\node_modules" (
-    echo Installing Client Dependencies...
+    echo Installing client dependencies... ^|  正在安裝前端套件…
     cd client
     call npm install
     cd ..
 )
 
-echo Starting Backend Server...
-start "WMS Backend" cmd /c "cd server && npm start"
+:: Match better-sqlite3 native binary to THIS Node.js
+set "SKIP_REBUILD=0"
+if exist "server\.node_abi_cache" (
+    set /p ABI_CACHED=<"server\.node_abi_cache"
+    if "!ABI_CACHED!"=="!NODE_FULL!" set "SKIP_REBUILD=1"
+)
+if "!SKIP_REBUILD!"=="1" (
+    echo [OK] Skip better-sqlite3 rebuild — matches Node !NODE_FULL! ^|  略過 better-sqlite3 重建（已符合目前 Node 版本）
+) else (
+    echo Rebuilding better-sqlite3 for Node !NODE_FULL!... ^|  正為目前的 Node 重新編譯 better-sqlite3（換 Node 主版本後必做）…
+    pushd "%~dp0server"
+    call npm rebuild better-sqlite3
+    set "RB=!ERRORLEVEL!"
+    popd
+    if not "!RB!"=="0" (
+        echo.
+        echo [ERROR / 錯誤] npm rebuild better-sqlite3 failed. Fix then retry from folder server ^|  rebuild 失敗，後端無法啟動。請於 server 目錄檢視錯誤後重試 npm rebuild better-sqlite3
+        pause
+        exit /b 1
+    )
+    node -e "require('fs').writeFileSync(require('path').join('server','.node_abi_cache'), process.version)"
+)
 
-echo Starting Frontend Client...
-start "WMS Frontend" cmd /c "cd client && npm run dev"
+echo Starting backend... ^|  啟動後端視窗…
+start "WMS Backend" cmd /k "cd /d ""%~dp0server"" && npm start"
 
-echo System starting...
-echo Backend: http://localhost:3000
-echo Frontend: http://localhost:5173
+echo Starting frontend... ^|  啟動前端視窗…
+start "WMS Frontend" cmd /k "cd /d ""%~dp0client"" && npm run dev"
+
+echo.
+echo System starting  ^|  系統啟動說明
+echo Backend ^|  後端埠: http://localhost:3000
+echo Frontend ^| 前端（Vite）：http://localhost:5173  （若為 --host，請以前端視窗實際 URL 為準）
+echo Note ^|  說明: Vite proxy ECONNREFUSED = backend not listening ^|  若出現代理連線被拒，代表後端未成功啟動，請先看「WMS Backend」視窗（常見為 better-sqlite3 需 rebuild）。
+echo Optionally ^|  另可於專案根目錄：npm install 後執行 npm run dev （單一終端並行）。
 pause
+exit /b 0

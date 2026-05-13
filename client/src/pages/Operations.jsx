@@ -3,6 +3,23 @@ import { submitTransaction, getItemDetails, getBom, submitBomTransaction } from 
 import { Scan, ArrowDownToLine, ArrowUpFromLine, CheckCircle, AlertTriangle, Package, Layers } from 'lucide-react';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
+import {
+    OPS_BOM_MISMATCH,
+    OPS_STAGED,
+    OPS_BOM_SELECTED,
+    OPS_SKIPPED,
+    OPS_BOM_OUT_SUCCESS,
+    OPS_PRINT_READY,
+    OPS_TX_SUCCESS,
+    OPERATION_FAILED,
+    BATCH_OUT_FAILED,
+    MOBILE_IN,
+    MOBILE_OUT,
+    OPS_CONFIRM_SKIP_COMPONENT,
+    OPS_CONFIRM_PARTIAL_BOM,
+    OPS_CONFIRM_ZERO_COMPONENT_PICKS,
+    axiosErrorDetail,
+} from '../userFacingMessages';
 
 const Operations = () => {
     const [mode, setMode] = useState(() => {
@@ -157,7 +174,7 @@ const Operations = () => {
 
                 // Optional: Check if part of BOM locally (prevent accidental scans)
                 if (!bomOutData.components.find(c => c.component_barcode === bcode)) {
-                    setMessage({ type: 'error', text: '此元件不屬於當前主件的配方!' });
+                    setMessage({ type: 'error', text: OPS_BOM_MISMATCH });
                     setLoading(false);
                     return;
                 }
@@ -174,7 +191,7 @@ const Operations = () => {
                     return { ...prev, components: newComps, staged_picks: newPicks };
                 });
 
-                setMessage({ type: 'success', text: `已暫存元件! (${bcode})` });
+                setMessage({ type: 'success', text: OPS_STAGED(bcode) });
             } else {
                 // Standard IN/OUT or NO_STICKER_IN
                 // Map NO_STICKER_IN to standard IN for the backend API
@@ -185,7 +202,11 @@ const Operations = () => {
                     location_code: locationCode.trim(),
                     quantity: parseFloat(quantity)
                 }, token);
-                setMessage({ type: 'success', text: `成功入庫! 最新數量: ${res.data.newQty}` });
+                const inOutDisplay = apiMode === 'IN' ? MOBILE_IN : MOBILE_OUT;
+                setMessage({
+                    type: 'success',
+                    text: OPS_TX_SUCCESS(inOutDisplay, res.data.newQty),
+                });
             }
 
             setBarcode('');
@@ -197,7 +218,10 @@ const Operations = () => {
             setMaxAllowedQty(null);
             barcodeInputRef.current?.focus();
         } catch (err) {
-            setMessage({ type: 'error', text: err.response?.data?.error || '操作失敗' });
+            setMessage({
+                type: 'error',
+                text: axiosErrorDetail(err, OPERATION_FAILED),
+            });
         } finally {
             setLoading(false);
         }
@@ -222,7 +246,7 @@ const Operations = () => {
         setBarcode('');
         setLocationCode('');
         setQuantity('');
-        setMessage({ type: 'success', text: '主件選取完成，請開始逐一掃描出庫元件' });
+        setMessage({ type: 'success', text: OPS_BOM_SELECTED });
     };
 
     const handleCancelBom = () => {
@@ -235,7 +259,7 @@ const Operations = () => {
     };
 
     const handleSkipComponent = (component_barcode) => {
-        if (!window.confirm(`確定要將元件 ${component_barcode} 標記為不需取料嗎？\n(進度將直接滿額，但本次出庫不會扣除也不會紀錄該元件)`)) return;
+        if (!window.confirm(OPS_CONFIRM_SKIP_COMPONENT(component_barcode))) return;
         setBomOutData(prev => {
             const newComps = prev.components.map(comp => {
                 if (comp.component_barcode === component_barcode) {
@@ -245,17 +269,17 @@ const Operations = () => {
             });
             return { ...prev, components: newComps };
         });
-        setMessage({ type: 'success', text: `已略過元件: ${component_barcode}` });
+        setMessage({ type: 'success', text: OPS_SKIPPED(component_barcode) });
     };
 
     const handleConfirmBom = async () => {
         const allDone = bomOutData.components.every(c => c.picked_total >= c.required_total);
         if (!allDone) {
-            if (!window.confirm("尚有元件數量不足或未掃描，確定要直接出貨 (僅扣除已掃描數量) 嗎？")) return;
+            if (!window.confirm(OPS_CONFIRM_PARTIAL_BOM)) return;
         }
 
         if (!bomOutData.staged_picks || bomOutData.staged_picks.length === 0) {
-            if (!window.confirm("尚未掃描任何出庫元件 (本次扣帳數量為0)，確定要結束此主件作業嗎？")) return;
+            if (!window.confirm(OPS_CONFIRM_ZERO_COMPONENT_PICKS)) return;
         }
 
         setLoading(true);
@@ -267,14 +291,20 @@ const Operations = () => {
                 staged_picks: bomOutData.staged_picks
             }, token);
 
-            setMessage({ type: 'success', text: `主件 ${bomOutData.mainBarcode} 批次出庫成功! 共處理 ${res.data.processedComponents} 筆` });
+            setMessage({
+                type: 'success',
+                text: OPS_BOM_OUT_SUCCESS(bomOutData.mainBarcode, res.data.processedComponents),
+            });
             setBomOutData({ isActive: false, mainBarcode: '', sets: 1, components: [], staged_picks: [] });
             setBomInfo(null);
             setBarcode('');
             setLocationCode('');
             setQuantity('');
         } catch (err) {
-            setMessage({ type: 'error', text: err.response?.data?.error || '批次出庫失敗' });
+            setMessage({
+                type: 'error',
+                text: axiosErrorDetail(err, BATCH_OUT_FAILED),
+            });
         } finally {
             setLoading(false);
         }
@@ -283,7 +313,7 @@ const Operations = () => {
     const handlePrintSticker = () => {
         if (!itemInfo) return;
         window.print();
-        setMessage({ type: 'success', text: '貼紙列印對話框已開啟' });
+        setMessage({ type: 'success', text: OPS_PRINT_READY });
     };
 
     return (

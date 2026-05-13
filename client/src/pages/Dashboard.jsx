@@ -30,7 +30,7 @@ const Dashboard = () => {
 
     const fetchStats = async () => {
         try {
-            const [locRes, itemsRes] = await Promise.all([getLocations(), getItems()]);
+            const [locRes, itemsRes] = await Promise.all([getLocations(), getItems(undefined, { summary: true })]);
             const locations = Array.isArray(locRes.data) ? locRes.data : [];
             const items = Array.isArray(itemsRes.data) ? itemsRes.data : [];
 

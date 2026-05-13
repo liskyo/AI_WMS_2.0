@@ -10,6 +10,7 @@ import UserManagement from './pages/UserManagement';
 import LoginPage from './pages/LoginPage';
 import { AuthProvider } from './context/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
+import BackendStatusBanner from './components/BackendStatusBanner';
 import TransactionHistory from './pages/TransactionHistory';
 import MobileScanner from './pages/MobileScanner';
 import StockCheck from './pages/StockCheck';
@@ -17,6 +18,7 @@ import StockCheck from './pages/StockCheck';
 function App() {
   return (
     <AuthProvider>
+      <BackendStatusBanner />
       <Router>
         <Routes>
           <Route path="/login" element={<LoginPage />} />

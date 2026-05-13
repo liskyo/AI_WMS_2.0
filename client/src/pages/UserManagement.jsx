@@ -2,6 +2,12 @@ import { useState, useEffect } from 'react';
 import { getUsers, createUser, updateUser, deleteUser } from '../api';
 import { Users, UserPlus, Edit, Trash, Save, X, Lock, Eye, EyeOff, Shield } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import {
+    SAVE_USER_FAILED_PREFIX,
+    DELETE_USER_FAILED,
+    CONFIRM_DELETE_USER_ZH_EN,
+    axiosErrorDetail,
+} from '../userFacingMessages';
 
 const GROUPS = ['管理者', '主管', '生管', '物管', '採購'];
 const PERMISSIONS = [
@@ -55,17 +61,17 @@ const UserManagement = () => {
             fetchUsers(token);
             resetForm();
         } catch (err) {
-            alert('儲存失敗: ' + (err.response?.data?.error || err.message));
+            alert(`${SAVE_USER_FAILED_PREFIX}: ${axiosErrorDetail(err, '（無詳細說明）')}`);
         }
     };
 
     const handleDelete = async (id) => {
-        if (!window.confirm('確定要刪除此使用者？')) return;
+        if (!window.confirm(CONFIRM_DELETE_USER_ZH_EN)) return;
         try {
             await deleteUser(id, token);
             fetchUsers(token);
         } catch (err) {
-            alert('刪除失敗');
+            alert(`${DELETE_USER_FAILED}: ${axiosErrorDetail(err, '（無詳細說明）')}`);
         }
     };
 

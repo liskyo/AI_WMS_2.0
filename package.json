@@ -1,0 +1,12 @@
+{
+  "name": "smart-warehouse-wms-root",
+  "private": true,
+  "scripts": {
+    "dev:server": "npm run start --prefix server",
+    "dev:client": "npm run dev --prefix client",
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
