@@ -98,6 +98,22 @@ const initDb = () => {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(main_barcode, component_barcode)
     );
+
+    CREATE TABLE IF NOT EXISTS stock_check_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      location_code TEXT NOT NULL,
+      barcode TEXT NOT NULL,
+      item_name TEXT,
+      unit TEXT,
+      system_quantity REAL NOT NULL,
+      matched INTEGER NOT NULL,
+      mismatch_reason TEXT,
+      user_id INTEGER,
+      employee_id TEXT,
+      user_name TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
   `;
   db.exec(createTables);
   console.log('Database initialized.');
@@ -188,6 +204,8 @@ const initDb = () => {
       CREATE INDEX IF NOT EXISTS idx_bom_main_barcode ON bom_items(main_barcode);
       CREATE INDEX IF NOT EXISTS idx_transactions_ts ON transactions(timestamp);
       CREATE INDEX IF NOT EXISTS idx_transactions_item ON transactions(item_id);
+      CREATE INDEX IF NOT EXISTS idx_stock_check_created ON stock_check_records(created_at);
+      CREATE INDEX IF NOT EXISTS idx_stock_check_location ON stock_check_records(location_code);
     `);
   } catch (idxErr) {
     console.warn('Index creation note:', idxErr.message);
@@ -402,6 +420,225 @@ app.get('/api/locations/:code/inventory', (req, res) => {
     res.json({ location, inventory });
   } catch (err) {
     console.error('Error fetching location inventory:', err);
+    res.status(500).json({ error: userFacingCatch(err.message) });
+  }
+});
+
+// --- Stock check on-site records (盤點紀錄) ---
+const requireAuthStrict = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return res.status(401).json({ error: bi('未授權，請先登入', 'Unauthorized — please sign in') });
+  }
+  const parts = authHeader.split(' ');
+  const token = parts.length > 1 ? parts[1] : parts[0];
+  try {
+    req.authPayload = JSON.parse(Buffer.from(token, 'base64').toString('utf-8'));
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: bi('登入憑證無效或已過期', 'Invalid or expired login token') });
+  }
+};
+
+const requireStockCheckPermission = (req, res, next) => {
+  const p = req.authPayload?.permissions;
+  if (!Array.isArray(p)) {
+    return res.status(403).json({ error: bi('權限不足', 'Insufficient permission') });
+  }
+  if (p.includes('ALL') || p.includes('STOCKCHECK') || p.includes('VIEW')) return next();
+  res.status(403).json({ error: bi('權限不足', 'Insufficient permission') });
+};
+
+function parseStockCheckRange(fromQ, toQ) {
+  const now = Date.now();
+  let fromMs = now - 7 * 86400000;
+  let toMs = now;
+  try {
+    if (fromQ) fromMs = new Date(fromQ).getTime();
+    if (toQ) toMs = new Date(toQ).getTime();
+  } catch (_) {
+    /* keep defaults */
+  }
+  if (Number.isNaN(fromMs) || Number.isNaN(toMs) || fromMs > toMs) {
+    fromMs = now - 7 * 86400000;
+    toMs = now;
+  }
+  const fromISO = new Date(fromMs).toISOString();
+  const toISO = new Date(toMs).toISOString();
+  return { fromISO, toISO };
+}
+
+function iso8601ToSQLiteTimeText(iso) {
+  const t = Date.parse(iso);
+  const d = new Date(Number.isNaN(t) ? Date.now() : t);
+  return d.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+app.post('/api/stock-check/records', requireAuthStrict, requireStockCheckPermission, (req, res) => {
+  try {
+    const { location_code, lines } = req.body;
+    if (!location_code || String(location_code).trim() === '') {
+      return res.status(400).json({ error: bi('缺少儲位代碼', 'Missing location code') });
+    }
+    if (!Array.isArray(lines) || lines.length === 0) {
+      return res.status(400).json({ error: bi('請至少提交一筆料件核對紀錄', 'At least one counted line required') });
+    }
+
+    const u = db.prepare('SELECT id, employee_id, name FROM users WHERE id = ?').get(req.authPayload.id);
+    const userRow = {
+      user_id: u?.id ?? req.authPayload.id,
+      employee_id: String(u?.employee_id ?? ''),
+      user_name: String(u?.name ?? req.authPayload.name ?? '')
+    };
+
+    const trimmedLoc = String(location_code).trim();
+    const insertStmt = db.prepare(`
+      INSERT INTO stock_check_records
+        (location_code, barcode, item_name, unit, system_quantity, matched, mismatch_reason, user_id, employee_id, user_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const normalized = [];
+    for (let i = 0; i < lines.length; i++) {
+      const ln = lines[i];
+      const barcode = ln.barcode != null ? String(ln.barcode).trim() : '';
+      if (!barcode) {
+        return res.status(400).json({
+          error: bi(`第 ${i + 1} 筆缺少料號`, `Line ${i + 1}: missing barcode`)
+        });
+      }
+      const mRaw = ln.matched;
+      let matched;
+      if (mRaw === true || mRaw === 1 || mRaw === 'true') matched = true;
+      else if (mRaw === false || mRaw === 0 || mRaw === 'false') matched = false;
+      else {
+        return res.status(400).json({
+          error: bi(
+            `料號 ${barcode} 須標示為帳料相符或帳料不符`,
+            `Barcode ${barcode}: set matched true or false`
+          )
+        });
+      }
+      const mismatchReason = ln.mismatch_reason != null ? String(ln.mismatch_reason).trim() : '';
+      if (!matched && mismatchReason === '') {
+        return res.status(400).json({
+          error: bi(
+            `料號 ${barcode} 標示帳料不符時須填寫原因`,
+            `Barcode ${barcode}: mismatch reason required`
+          )
+        });
+      }
+      const qty = parseFloat(ln.system_quantity);
+      if (Number.isNaN(qty)) {
+        return res.status(400).json({
+          error: bi(`料號 ${barcode} 的系統數量無效`, `Barcode ${barcode}: invalid quantity`)
+        });
+      }
+      const reasonToStore = matched ? null : mismatchReason.slice(0, 2000);
+      const itemName = ln.item_name != null ? String(ln.item_name) : '';
+      const unitVal = ln.unit != null ? String(ln.unit) : '';
+      normalized.push({
+        barcode,
+        itemName,
+        unitVal,
+        qty,
+        matchedFlag: matched ? 1 : 0,
+        reasonToStore
+      });
+    }
+
+    db.transaction(() => {
+      for (const r of normalized) {
+        insertStmt.run(
+          trimmedLoc,
+          r.barcode,
+          r.itemName,
+          r.unitVal,
+          r.qty,
+          r.matchedFlag,
+          r.reasonToStore,
+          userRow.user_id,
+          userRow.employee_id,
+          userRow.user_name
+        );
+      }
+    })();
+
+    res.json({ success: true, inserted: normalized.length });
+  } catch (err) {
+    res.status(500).json({ error: userFacingCatch(err.message) });
+  }
+});
+
+app.get('/api/stock-check/records', requireAuthStrict, requireStockCheckPermission, (req, res) => {
+  try {
+    const { from: fromQ, to: toQ } = req.query;
+    const { fromISO, toISO } = parseStockCheckRange(fromQ, toQ);
+    const tb = iso8601ToSQLiteTimeText(fromISO);
+    const te = iso8601ToSQLiteTimeText(toISO);
+    const items = db
+      .prepare(
+        `
+      SELECT id, created_at, location_code, barcode, item_name, unit, system_quantity, matched,
+             mismatch_reason, employee_id, user_name
+      FROM stock_check_records
+      WHERE created_at >= ? AND created_at <= ?
+      ORDER BY created_at DESC
+      LIMIT 25000
+    `
+      )
+      .all(tb, te);
+    res.json({ items, from: fromISO, to: toISO, total: items.length });
+  } catch (err) {
+    res.status(500).json({ error: userFacingCatch(err.message) });
+  }
+});
+
+app.get('/api/stock-check/records/export', requireAuthStrict, requireStockCheckPermission, (req, res) => {
+  try {
+    const { from: fromQ, to: toQ } = req.query;
+    const { fromISO, toISO } = parseStockCheckRange(fromQ, toQ);
+    const tb = iso8601ToSQLiteTimeText(fromISO);
+    const te = iso8601ToSQLiteTimeText(toISO);
+    const rows = db
+      .prepare(
+        `
+      SELECT created_at AS 時間,
+             location_code AS 盤點儲位,
+             barcode AS 元件品號,
+             item_name AS 品名,
+             unit AS 單位,
+             system_quantity AS 系統數量,
+             CASE WHEN matched = 1 THEN '帳料相符' ELSE '帳料不符' END AS 帳料結果,
+             COALESCE(mismatch_reason, '') AS 不符原因,
+             COALESCE(employee_id, '') AS 盤點人工號,
+             COALESCE(user_name, '') AS 盤點人姓名
+      FROM stock_check_records
+      WHERE created_at >= ? AND created_at <= ?
+      ORDER BY created_at ASC
+    `
+      )
+      .all(tb, te);
+
+    const excelRows =
+      rows.length > 0
+        ? rows
+        : [{ 時間: '(無資料)', 盤點儲位: '', 元件品號: '', 品名: '', 單位: '', 系統數量: '', 帳料結果: '', 不符原因: '', 盤點人工號: '', 盤點人姓名: '' }];
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(excelRows);
+    XLSX.utils.book_append_sheet(wb, ws, '盤點紀錄');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const safeFrom = String(fromISO).slice(0, 10).replace(/[^0-9-]/g, '');
+    const safeTo = String(toISO).slice(0, 10).replace(/[^0-9-]/g, '');
+    const fname = `盤點紀錄_${safeFrom}_${safeTo}.xlsx`;
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fname)}`);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.send(buf);
+  } catch (err) {
     res.status(500).json({ error: userFacingCatch(err.message) });
   }
 });
@@ -634,6 +871,7 @@ app.post('/api/admin/login', (req, res) => {
       success: true,
       token,
       user: {
+        employee_id: user.employee_id,
         name: user.name,
         group_name: user.group_name, // Frontend expects 'group_name'
         permissions: JSON.parse(user.permissions)

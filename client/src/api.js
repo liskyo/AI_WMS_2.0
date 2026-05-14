@@ -68,4 +68,16 @@ export const importBom = (bomData, token) => api.post('/admin/import/bom', { bom
 export const getBom = (main_barcode = '') => api.get(`/bom`, { params: { main_barcode } });
 export const submitBomTransaction = (data, token) => api.post('/transactions/bom-out', data, { headers: { Authorization: `Bearer ${token}` } });
 
+// Stock check onsite records（盤點紀錄）
+export const postStockCheckRecords = (body, token) =>
+    api.post('/stock-check/records', body, { headers: { Authorization: `Bearer ${token}` } });
+export const getStockCheckRecords = (params, token) =>
+    api.get('/stock-check/records', { params, headers: { Authorization: `Bearer ${token}` } });
+export const exportStockCheckRecords = (params, token) =>
+    api.get('/stock-check/records/export', {
+        params,
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob',
+    });
+
 export default api;

@@ -14,6 +14,7 @@ import BackendStatusBanner from './components/BackendStatusBanner';
 import TransactionHistory from './pages/TransactionHistory';
 import MobileScanner from './pages/MobileScanner';
 import StockCheck from './pages/StockCheck';
+import StockCheckRecords from './pages/StockCheckRecords';
 
 function App() {
   return (
@@ -34,6 +35,7 @@ function App() {
               <Route path="/inventory" element={<Inventory />} />
               <Route path="/reports" element={<Reports />} />
               <Route path="/stockcheck" element={<StockCheck />} />
+              <Route path="/stockcheck/records" element={<StockCheckRecords />} />
               <Route path="/import" element={<ImportPage />} />
               <Route path="/users" element={<UserManagement />} />
             </Route>

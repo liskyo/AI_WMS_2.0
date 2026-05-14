@@ -1,5 +1,5 @@
 import { Link, useLocation, Outlet } from 'react-router-dom';
-import { LayoutDashboard, ArrowRightLeft, Package, User, FileBarChart, Settings, Shield, LogOut, History, Smartphone, ClipboardCheck } from 'lucide-react';
+import { LayoutDashboard, ArrowRightLeft, Package, User, FileBarChart, Settings, Shield, LogOut, History, Smartphone, ClipboardCheck, FileSpreadsheet } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import clsx from 'clsx';
 
@@ -23,6 +23,7 @@ const Layout = () => {
         { path: '/inventory', label: '庫存查詢', icon: Package, visible: hasPermission('VIEW') },
         { path: '/reports', label: '庫存報表', icon: FileBarChart, visible: hasPermission('REPORT') || hasPermission('VIEW') },
         { path: '/stockcheck', label: '盤點作業', icon: ClipboardCheck, visible: hasPermission('STOCKCHECK') || hasPermission('VIEW') },
+        { path: '/stockcheck/records', label: '盤點紀錄', icon: FileSpreadsheet, visible: hasPermission('STOCKCHECK') || hasPermission('VIEW') },
         { path: '/import', label: '資料匯入', icon: Settings, visible: hasPermission('IMPORT') },
         { path: '/users', label: '人員管理', icon: Shield, visible: user?.group_name === '管理者' || hasPermission('ALL') },
     ];
