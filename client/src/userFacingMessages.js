@@ -53,6 +53,28 @@ export const OPS_CONFIRM_PARTIAL_BOM =
 export const OPS_CONFIRM_ZERO_COMPONENT_PICKS =
     '尚未掃描任何出庫元件（扣帳為 0）。確定要結束此主件作業？\nNo picks scanned (0 deducted). Close this BOM job anyway?';
 
+export const OPS_MO_MISMATCH =
+    '此材料品號不在當前製令領料清單中 Barcode is not on this manufacturing work order pick list';
+export const OPS_MO_SELECTED =
+    '製令載入完成，請開始逐一掃描領料 Work order loaded — scan each material to pick';
+export const OPS_MO_OUT_SUCCESS = (wo, pickCount, skipCount, fullyPicked) => {
+    const parts = [];
+    if (pickCount > 0) parts.push(`已扣庫 ${pickCount} 筆`);
+    if (skipCount > 0) parts.push(`略過不扣帳 ${skipCount} 筆`);
+    const summary = parts.length ? parts.join('、') : '無扣庫／略過筆數';
+    const tail = fullyPicked
+        ? ' 本製令已全數領畢，將自「庫存查詢」「庫存報表｜製令工單總表」移除（出入庫紀錄仍保留）；若要再領請重新匯入。'
+        : '';
+    return `製令 ${wo} 領料結案 — ${summary}。${tail} MO outbound OK`.trim();
+};
+export const OPS_CONFIRM_PARTIAL_MO =
+    '尚有材料未領滿或未掃描也未略過，確定結案？將只對已暫存的掃描扣庫，略過項可不扣庫但增加已領用量。\nFinalize short — deduct staged picks only; waived lines add picked qty without stock move?';
+export const OPS_CONFIRM_ZERO_MO_PICKS =
+    '目前沒有任何「暫存扣庫掃描」，也沒有標記「略過不扣帳」。確定不異動任何資料並關閉此畫面？\nNo staged picks and no waived lines — close without submitting?';
+
+export const OPS_CONFIRM_SKIP_MO_LINE = (barcode) =>
+    `確定對 ${barcode}「略過不扣帳」？將寫入略過出庫紀錄（不動即時庫存）、並依剩餘量提高已領用量。\nWaive picking for ${barcode} — no inventory move, picked qty increases?`;
+
 export const IMPORT_SUCCESS = (count) => `成功匯入 ${count} 筆資料 Import succeeded — ${count} row(s)`;
 export const RENAME_FLOOR_SUCCESS = (count) =>
     `成功更新 ${count} 個儲位至新樓層 Rename OK — ${count} location(s) on new floor`;

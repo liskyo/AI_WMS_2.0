@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { submitTransaction, getItemDetails, getBom, submitBomTransaction } from '../api';
-import { Scan, ArrowDownToLine, ArrowUpFromLine, CheckCircle, AlertTriangle, Package, Layers } from 'lucide-react';
+import { submitTransaction, getItemDetails, getBom, submitBomTransaction, getWorkOrderForOut, submitMoOutTransaction } from '../api';
+import { Scan, ArrowDownToLine, ArrowUpFromLine, CheckCircle, AlertTriangle, Package, Layers, ClipboardList } from 'lucide-react';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -18,6 +18,12 @@ import {
     OPS_CONFIRM_SKIP_COMPONENT,
     OPS_CONFIRM_PARTIAL_BOM,
     OPS_CONFIRM_ZERO_COMPONENT_PICKS,
+    OPS_MO_MISMATCH,
+    OPS_MO_SELECTED,
+    OPS_MO_OUT_SUCCESS,
+    OPS_CONFIRM_PARTIAL_MO,
+    OPS_CONFIRM_ZERO_MO_PICKS,
+    OPS_CONFIRM_SKIP_MO_LINE,
     axiosErrorDetail,
 } from '../userFacingMessages';
 
@@ -36,6 +42,10 @@ const Operations = () => {
         const saved = sessionStorage.getItem('wms_ops_bomInfo');
         return saved ? JSON.parse(saved) : null;
     }); // For BOM Outbound setup
+    const [moInfo, setMoInfo] = useState(() => {
+        const saved = sessionStorage.getItem('wms_ops_moInfo');
+        return saved ? JSON.parse(saved) : null;
+    });
     const [bomOutData, setBomOutData] = useState(() => {
         const saved = sessionStorage.getItem('wms_ops_bomOutData');
         return saved ? JSON.parse(saved) : {
@@ -43,6 +53,24 @@ const Operations = () => {
             mainBarcode: '',
             sets: 1,
             components: [] // { component_barcode, required_total, picked_total, current_stock }
+        };
+    });
+
+    const [moOutData, setMoOutData] = useState(() => {
+        const saved = sessionStorage.getItem('wms_ops_moOutData');
+        const base = saved
+            ? JSON.parse(saved)
+            : {
+                  isActive: false,
+                  workOrderNo: '',
+                  openDate: null,
+                  lines: [],
+                  staged_picks: [],
+                  skipped_barcodes: [],
+              };
+        return {
+            ...base,
+            skipped_barcodes: Array.isArray(base.skipped_barcodes) ? base.skipped_barcodes : [],
         };
     });
 
@@ -63,30 +91,53 @@ const Operations = () => {
     }, [bomOutData]);
 
     useEffect(() => {
+        if (moInfo) sessionStorage.setItem('wms_ops_moInfo', JSON.stringify(moInfo));
+        else sessionStorage.removeItem('wms_ops_moInfo');
+    }, [moInfo]);
+
+    useEffect(() => {
+        sessionStorage.setItem('wms_ops_moOutData', JSON.stringify(moOutData));
+    }, [moOutData]);
+
+    useEffect(() => {
         if (mode === 'BOM_OUT' && bomOutData.isActive && barcode) {
-            const comp = bomOutData.components.find(c => c.component_barcode === barcode);
+            const comp = bomOutData.components.find((c) => c.component_barcode === barcode);
             if (comp) {
                 const remaining = Math.max(0, comp.required_total - comp.picked_total);
                 setMaxAllowedQty(remaining);
-                if (remaining > 0) {
-                    setQuantity(remaining.toString());
-                }
+                if (remaining > 0) setQuantity(remaining.toString());
+            } else {
+                setMaxAllowedQty(null);
+            }
+        } else if (mode === 'MO_OUT' && moOutData.isActive && barcode) {
+            const b = barcode.trim();
+            const line = moOutData.lines.find((l) => l.material_barcode === b);
+            if (moOutData.skipped_barcodes?.includes(b)) {
+                setMaxAllowedQty(0);
+                return;
+            }
+            if (line) {
+                const picked = line.picked_qty_db + line.picked_session;
+                const remaining = Math.max(0, line.required_qty - picked);
+                setMaxAllowedQty(remaining);
+                if (remaining > 0) setQuantity(remaining.toString());
             } else {
                 setMaxAllowedQty(null);
             }
         } else {
             setMaxAllowedQty(null);
         }
-    }, [barcode, mode, bomOutData.isActive, bomOutData.components]);
+    }, [barcode, mode, bomOutData.isActive, bomOutData.components, moOutData.isActive, moOutData.lines, moOutData.skipped_barcodes]);
 
-    // 驗證 BOM 出庫數量不超過剩餘應出數量
+    // 驗證 BOM／製令出庫數量不超過剩餘應出數量
     useEffect(() => {
-        if (mode === 'BOM_OUT' && bomOutData.isActive && maxAllowedQty !== null && quantity !== '') {
+        const pickMode = (mode === 'BOM_OUT' && bomOutData.isActive) || (mode === 'MO_OUT' && moOutData.isActive);
+        if (pickMode && maxAllowedQty !== null && quantity !== '') {
             setQuantityOverflow(parseFloat(quantity) > maxAllowedQty);
         } else {
             setQuantityOverflow(false);
         }
-    }, [quantity, mode, bomOutData.isActive, maxAllowedQty]);
+    }, [quantity, mode, bomOutData.isActive, moOutData.isActive, maxAllowedQty]);
 
     // Cleanup and Focus Management
     const [loading, setLoading] = useState(false);
@@ -96,43 +147,54 @@ const Operations = () => {
 
     // 驗證出庫儲位是否與料件實際所在儲位相符
     useEffect(() => {
-        if ((mode === 'OUT' || (mode === 'BOM_OUT' && bomOutData.isActive)) && locationCode.trim()) {
-            // 出庫模式 - 一般出庫查 itemInfo, BOM_OUT 查元件的 locations
-            if (mode === 'OUT' && itemInfo) {
-                const validLocations = itemInfo.inventory.map(inv => inv.location_code);
-                setLocationMismatch(validLocations.length > 0 && !validLocations.includes(locationCode.trim()));
-            } else if (mode === 'BOM_OUT' && bomOutData.isActive && barcode) {
-                const comp = bomOutData.components.find(c => c.component_barcode === barcode.trim());
-                if (comp && comp.locations) {
-                    const locList = comp.locations.split(',').map(l => {
-                        const trimmed = l.trim();
-                        const colonIdx = trimmed.lastIndexOf(':');
-                        return colonIdx > 0 ? trimmed.substring(0, colonIdx) : trimmed;
-                    });
-                    setLocationMismatch(locList.length > 0 && locList[0] !== '' && !locList.includes(locationCode.trim()));
-                } else {
-                    setLocationMismatch(false);
-                }
+        const outboundPick =
+            mode === 'OUT' ||
+            (mode === 'BOM_OUT' && bomOutData.isActive) ||
+            (mode === 'MO_OUT' && moOutData.isActive);
+        if (!outboundPick || !locationCode.trim()) {
+            setLocationMismatch(false);
+            return;
+        }
+        if (mode === 'OUT' && itemInfo) {
+            const validLocations = itemInfo.inventory.map((inv) => inv.location_code);
+            setLocationMismatch(validLocations.length > 0 && !validLocations.includes(locationCode.trim()));
+            return;
+        }
+        if (mode === 'BOM_OUT' && bomOutData.isActive && barcode) {
+            const comp = bomOutData.components.find((c) => c.component_barcode === barcode.trim());
+            if (comp && comp.locations) {
+                const locList = comp.locations.split(',').map((l) => {
+                    const trimmed = l.trim();
+                    const colonIdx = trimmed.lastIndexOf(':');
+                    return colonIdx > 0 ? trimmed.substring(0, colonIdx) : trimmed;
+                });
+                setLocationMismatch(locList.length > 0 && locList[0] !== '' && !locList.includes(locationCode.trim()));
             } else {
                 setLocationMismatch(false);
             }
-        } else {
-            setLocationMismatch(false);
+            return;
         }
-    }, [locationCode, mode, itemInfo, bomOutData, barcode]);
-
-    useEffect(() => {
-        if (barcode) {
-            if (mode === 'BOM_OUT') {
-                fetchBomInfo();
-            } else {
-                fetchItemInfo();
+        if (mode === 'MO_OUT' && moOutData.isActive && barcode) {
+            const b = barcode.trim();
+            const line = moOutData.lines.find((l) => l.material_barcode === b);
+            if (line && moOutData.skipped_barcodes?.includes(b)) {
+                setLocationMismatch(false);
+                return;
             }
-        } else {
-            setItemInfo(null);
-            setBomInfo(null);
+            if (line && line.locations) {
+                const locList = line.locations.split(',').map((l) => {
+                    const trimmed = l.trim();
+                    const colonIdx = trimmed.lastIndexOf(':');
+                    return colonIdx > 0 ? trimmed.substring(0, colonIdx) : trimmed;
+                });
+                setLocationMismatch(locList.length > 0 && locList[0] !== '' && !locList.includes(locationCode.trim()));
+            } else {
+                setLocationMismatch(false);
+            }
+            return;
         }
-    }, [barcode, mode]);
+        setLocationMismatch(false);
+    }, [locationCode, mode, itemInfo, bomOutData, moOutData, barcode]);
 
     const fetchItemInfo = async () => {
         try {
@@ -157,6 +219,32 @@ const Operations = () => {
             setBomInfo(null);
         }
     };
+
+    const fetchMoInfo = async () => {
+        try {
+            const trimmed = barcode.trim();
+            const res = await getWorkOrderForOut(trimmed);
+            setMoInfo(res.data);
+        } catch (_e) {
+            setMoInfo(null);
+        }
+    };
+
+    useEffect(() => {
+        if (!barcode) {
+            setItemInfo(null);
+            setBomInfo(null);
+            setMoInfo(null);
+            return;
+        }
+        if (mode === 'BOM_OUT' && !bomOutData.isActive) {
+            fetchBomInfo();
+        } else if (mode === 'MO_OUT' && !moOutData.isActive) {
+            fetchMoInfo();
+        } else if (mode !== 'BOM_OUT' && mode !== 'MO_OUT') {
+            fetchItemInfo();
+        }
+    }, [barcode, mode, bomOutData.isActive, moOutData.isActive]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -192,7 +280,33 @@ const Operations = () => {
                 });
 
                 setMessage({ type: 'success', text: OPS_STAGED(bcode) });
-            } else {
+            } else if (mode === 'MO_OUT' && moOutData.isActive) {
+                const bcode = barcode.trim();
+                const lcode = locationCode.trim();
+                const qty = parseFloat(quantity);
+
+                if (moOutData.skipped_barcodes?.includes(bcode)) {
+                    setMessage({ type: 'error', text: '此材料已標記「略過不扣帳」，請勿再掃描暫存。\nThis line is waived — do not stage picks.' });
+                    setLoading(false);
+                    return;
+                }
+
+                if (!moOutData.lines.find((l) => l.material_barcode === bcode)) {
+                    setMessage({ type: 'error', text: OPS_MO_MISMATCH });
+                    setLoading(false);
+                    return;
+                }
+
+                setMoOutData((prev) => ({
+                    ...prev,
+                    lines: prev.lines.map((line) =>
+                        line.material_barcode === bcode ? { ...line, picked_session: line.picked_session + qty } : line
+                    ),
+                    staged_picks: [...(prev.staged_picks || []), { barcode: bcode, location_code: lcode, quantity: qty }]
+                }));
+
+                setMessage({ type: 'success', text: OPS_STAGED(bcode) });
+            } else if (mode === 'OUT' || mode === 'IN' || mode === 'NO_STICKER_IN') {
                 // Standard IN/OUT or NO_STICKER_IN
                 // Map NO_STICKER_IN to standard IN for the backend API
                 const apiMode = mode === 'NO_STICKER_IN' ? 'IN' : mode;
@@ -310,11 +424,138 @@ const Operations = () => {
         }
     };
 
+    const handleStartMo = () => {
+        if (!moInfo?.lines?.length) return;
+        setMoOutData({
+            isActive: true,
+            workOrderNo: moInfo.work_order_no,
+            openDate: moInfo.open_date || null,
+            staged_picks: [],
+            skipped_barcodes: [],
+            lines: moInfo.lines.map((l) => ({
+                material_barcode: l.material_barcode,
+                material_name: l.material_name || '',
+                required_qty: Number(l.required_qty),
+                picked_qty_db: Number(l.picked_qty),
+                picked_session: 0,
+                current_stock: l.current_stock ?? 0,
+                locations: l.locations || '',
+                safe_stock: l.safe_stock ?? 0,
+            }))
+        });
+        setBarcode('');
+        setLocationCode('');
+        setQuantity('');
+        setMessage({ type: 'success', text: OPS_MO_SELECTED });
+    };
+
+    const handleCancelMo = () => {
+        setMoOutData({
+            isActive: false,
+            workOrderNo: '',
+            openDate: null,
+            lines: [],
+            staged_picks: [],
+            skipped_barcodes: [],
+        });
+        setMoInfo(null);
+        setBarcode('');
+        setLocationCode('');
+        setQuantity('');
+        setMessage(null);
+    };
+
+    const handleSkipMoLine = (material_barcode) => {
+        const bc = String(material_barcode || '').trim();
+        if (!bc) return;
+        if (!window.confirm(OPS_CONFIRM_SKIP_MO_LINE(bc))) return;
+        const stagedFor = (moOutData.staged_picks || []).filter((p) => p.barcode === bc).length;
+        if (stagedFor > 0) {
+            setMessage({
+                type: 'error',
+                text: `${bc} 已有暫存掃描，請先確認出庫或取消作業後再略過。\nCannot waive — unstaged picks exist for this line.`,
+            });
+            return;
+        }
+        setMoOutData((prev) => {
+            if (prev.skipped_barcodes.includes(bc)) return prev;
+            return { ...prev, skipped_barcodes: [...prev.skipped_barcodes, bc] };
+        });
+        setMessage({ type: 'success', text: OPS_SKIPPED(bc) });
+    };
+
+    const handleConfirmMo = async () => {
+        const skipped = moOutData.skipped_barcodes || [];
+        const eps = 1e-9;
+        const allDone = moOutData.lines.every((l) => {
+            const isSkip = skipped.includes(l.material_barcode);
+            const picked = l.picked_qty_db + l.picked_session;
+            return isSkip || picked >= l.required_qty - eps;
+        });
+        if (!allDone) {
+            if (!window.confirm(OPS_CONFIRM_PARTIAL_MO)) return;
+        }
+
+        const hasPicks = moOutData.staged_picks && moOutData.staged_picks.length > 0;
+        const hasSkips = skipped.length > 0;
+        if (!hasPicks && !hasSkips) {
+            if (!window.confirm(OPS_CONFIRM_ZERO_MO_PICKS)) return;
+        }
+
+        setLoading(true);
+        try {
+            const token = localStorage.getItem('token');
+            const res = await submitMoOutTransaction(
+                {
+                    work_order_no: moOutData.workOrderNo,
+                    staged_picks: moOutData.staged_picks || [],
+                    skipped_barcodes: skipped,
+                },
+                token
+            );
+
+            setMessage({
+                type: 'success',
+                text: OPS_MO_OUT_SUCCESS(
+                    moOutData.workOrderNo,
+                    res.data.processedPickLines ?? 0,
+                    res.data.processedSkips ?? 0,
+                    res.data.work_order_fully_picked
+                ),
+            });
+            setMoOutData({
+                isActive: false,
+                workOrderNo: '',
+                openDate: null,
+                lines: [],
+                staged_picks: [],
+                skipped_barcodes: [],
+            });
+            setMoInfo(null);
+            setBarcode('');
+            setLocationCode('');
+            setQuantity('');
+        } catch (err) {
+            setMessage({
+                type: 'error',
+                text: axiosErrorDetail(err, BATCH_OUT_FAILED),
+            });
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const handlePrintSticker = () => {
         if (!itemInfo) return;
         window.print();
         setMessage({ type: 'success', text: OPS_PRINT_READY });
     };
+
+    const bomPickActive = mode === 'BOM_OUT' && bomOutData.isActive;
+    const moPickActive = mode === 'MO_OUT' && moOutData.isActive;
+    const moBarcodeWaived =
+        moPickActive && barcode.trim() && (moOutData.skipped_barcodes || []).includes(barcode.trim());
+    const needsItemMaster = mode === 'IN' || mode === 'OUT' || mode === 'NO_STICKER_IN';
 
     return (
         <div className="space-y-8 transition-all duration-300 w-full">
@@ -349,13 +590,13 @@ const Operations = () => {
                         <ArrowUpFromLine size={18} /> 出庫 (Outbound)
                     </button>
                     <button
-                        onClick={() => { setMode('BOM_OUT'); setBarcode(''); }}
+                        onClick={() => { setMode('MO_OUT'); setBarcode(''); }}
                         className={clsx(
                             "px-6 py-2 rounded-md font-bold transition-all flex items-center gap-2",
-                            mode === 'BOM_OUT' ? "bg-yellow-600 text-white shadow-lg" : "text-gray-400 hover:text-white"
+                            mode === 'MO_OUT' ? "bg-violet-600 text-white shadow-lg" : "text-gray-400 hover:text-white"
                         )}
                     >
-                        <Layers size={18} /> 主件出庫 (BOM Out)
+                        <ClipboardList size={18} /> 製令工單出庫 (MO Pick)
                     </button>
                 </div>
             </header>
@@ -412,6 +653,40 @@ const Operations = () => {
                                     開始選取元件
                                 </button>
                             </>
+                        ) : mode === 'MO_OUT' && !moOutData.isActive ? (
+                            <>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-400 mb-1">
+                                        1. 輸入製令編號 (欄位 A)
+                                    </label>
+                                    <div className="relative">
+                                        <Scan className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={20} />
+                                        <input
+                                            ref={barcodeInputRef}
+                                            type="text"
+                                            className="w-full bg-gray-700 border border-gray-600 text-white pl-10 pr-4 py-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-lg font-mono placeholder-gray-500 transition-all focus:border-blue-500"
+                                            placeholder="製令編號..."
+                                            value={barcode}
+                                            onChange={(e) => setBarcode(e.target.value)}
+                                            autoFocus
+                                            required
+                                        />
+                                    </div>
+                                    {barcode && !moInfo && !loading && (
+                                        <p className="mt-2 text-sm text-red-400 font-bold bg-red-500/10 p-2 rounded border border-red-500/20">
+                                            ⚠️ 查無載入資料：無此製令、尚未匯入、或已全部領畢（可查「製令工單出入庫紀錄」）；若要再領請重新匯入
+                                        </p>
+                                    )}
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={handleStartMo}
+                                    disabled={!moInfo?.lines?.length}
+                                    className="w-full py-4 rounded-xl font-bold text-lg shadow-lg transform transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed bg-gradient-to-r from-violet-600 to-violet-500 hover:from-violet-500 hover:to-violet-400 text-white"
+                                >
+                                    開始領料（免選套數）
+                                </button>
+                            </>
                         ) : (
                             // Standard IN/OUT or Phase 2: Pick Components
                             <>
@@ -427,9 +702,27 @@ const Operations = () => {
                                         </div>
                                     </div>
                                 )}
+                                {mode === 'MO_OUT' && moOutData.isActive && (
+                                    <div className="bg-violet-500/10 border border-violet-500/50 p-4 rounded-xl mb-4 text-violet-300 flex justify-between items-center flex-wrap gap-2">
+                                        <div>
+                                            <span className="font-bold">製令：{moOutData.workOrderNo}</span>
+                                            {moOutData.openDate && (
+                                                <span className="ml-2 text-sm text-violet-200/90">開單：{moOutData.openDate}</span>
+                                            )}
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button type="button" onClick={handleConfirmMo} className="text-sm px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded font-bold transition-colors shadow-lg">確認領料出庫</button>
+                                            <button type="button" onClick={handleCancelMo} className="text-sm px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded transition-colors border border-gray-600">取消作業</button>
+                                        </div>
+                                    </div>
+                                )}
                                 <div>
                                     <label className="block text-sm font-medium text-gray-400 mb-1">
-                                        {mode === 'BOM_OUT' ? '1. 掃描元件條碼 (Component Barcode)' : '1. 掃描料件條碼 (Item Barcode)'}
+                                        {bomPickActive
+                                            ? '1. 掃描元件條碼 (Component Barcode)'
+                                            : moPickActive
+                                                ? '1. 掃描材料品號 (元件品號)'
+                                                : '1. 掃描料件條碼 (Item Barcode)'}
                                     </label>
                                     <div className="relative">
                                         <Scan className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={20} />
@@ -444,9 +737,19 @@ const Operations = () => {
                                             required
                                         />
                                     </div>
-                                    {mode !== 'BOM_OUT' && barcode && !itemInfo && !loading && (
+                                    {needsItemMaster && barcode && !itemInfo && !loading && (
                                         <p className="mt-2 text-sm text-red-400 font-bold bg-red-500/10 p-2 rounded border border-red-500/20">
                                             ⚠️ 總表內無此料件，無法作業！
+                                        </p>
+                                    )}
+                                    {moPickActive && barcode.trim() && moOutData.lines.some((l) => l.material_barcode === barcode.trim()) && moBarcodeWaived && (
+                                        <p className="mt-2 text-sm text-amber-300 font-bold bg-amber-500/10 p-2 rounded border border-amber-500/20">
+                                            此材料已標記「略過不扣帳」，請勿再掃描暫存
+                                        </p>
+                                    )}
+                                    {moPickActive && barcode.trim() && !moOutData.lines.some((l) => l.material_barcode === barcode.trim()) && (
+                                        <p className="mt-2 text-sm text-red-400 font-bold bg-red-500/10 p-2 rounded border border-red-500/20">
+                                            ⚠️ 此材料品號不在本製令領料清單內
                                         </p>
                                     )}
                                 </div>
@@ -464,7 +767,7 @@ const Operations = () => {
                                             value={locationCode}
                                             onChange={(e) => setLocationCode(e.target.value)}
                                             required
-                                            disabled={mode !== 'BOM_OUT' && !itemInfo}
+                                            disabled={needsItemMaster && !itemInfo}
                                         />
                                     </div>
                                     {locationMismatch && (
@@ -477,7 +780,7 @@ const Operations = () => {
 
                                 <div>
                                     <label className="block text-sm font-medium text-gray-400 mb-1">
-                                        3. 輸入數量 (Quantity)
+                                        3. 建議／實際領取數量（可領少不可領多）
                                     </label>
                                     <input
                                         type="number"
@@ -485,10 +788,10 @@ const Operations = () => {
                                         placeholder="1"
                                         value={quantity}
                                         onChange={(e) => setQuantity(e.target.value)}
-                                        min={mode === 'BOM_OUT' && bomOutData.isActive ? "0" : "0.001"}
+                                        min={bomPickActive || moPickActive ? '0' : '0.001'}
                                         step="any"
                                         required
-                                        disabled={mode !== 'BOM_OUT' && !itemInfo}
+                                        disabled={needsItemMaster && !itemInfo}
                                     />
                                     {quantityOverflow && (
                                         <div className="mt-2 p-3 bg-red-500/20 border border-red-500/50 rounded-xl flex items-center gap-2 text-red-400 font-bold text-sm animate-pulse">
@@ -500,7 +803,7 @@ const Operations = () => {
 
                                 <button
                                     type="submit"
-                                    disabled={loading || (mode !== 'BOM_OUT' && !itemInfo) || locationMismatch || quantityOverflow}
+                                    disabled={loading || (needsItemMaster && !itemInfo) || locationMismatch || quantityOverflow || moBarcodeWaived}
                                     className={clsx(
                                         "w-full py-4 rounded-xl font-bold text-lg shadow-lg transform transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed",
                                         mode === 'IN'
@@ -509,10 +812,22 @@ const Operations = () => {
                                                 ? "bg-gradient-to-r from-teal-600 to-teal-500 hover:from-teal-500 hover:to-teal-400 text-white"
                                                 : mode === 'OUT'
                                                     ? "bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-500 hover:to-orange-400 text-white"
-                                                    : "bg-gradient-to-r from-yellow-600 to-yellow-500 hover:from-yellow-500 hover:to-yellow-400 text-white"
+                                                    : mode === 'MO_OUT' && moPickActive
+                                                        ? "bg-gradient-to-r from-violet-600 to-violet-500 hover:from-violet-500 hover:to-violet-400 text-white"
+                                                        : "bg-gradient-to-r from-yellow-600 to-yellow-500 hover:from-yellow-500 hover:to-yellow-400 text-white"
                                     )}
                                 >
-                                    {loading ? '處理中...' : (mode === 'IN' ? '確認入庫' : mode === 'NO_STICKER_IN' ? '確認入庫 (無貼紙)' : mode === 'OUT' ? '確認出庫' : '確認元件出庫')}
+                                    {loading
+                                        ? '處理中...'
+                                        : mode === 'IN'
+                                            ? '確認入庫'
+                                            : mode === 'NO_STICKER_IN'
+                                                ? '確認入庫 (無貼紙)'
+                                                : mode === 'OUT'
+                                                    ? '確認出庫'
+                                                    : moPickActive
+                                                        ? '暫存此筆領料'
+                                                        : '確認元件出庫'}
                                 </button>
                             </>
                         )}
@@ -544,8 +859,14 @@ const Operations = () => {
                         className="bg-gray-800 p-6 rounded-2xl border border-gray-700 h-full"
                     >
                         <h3 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
-                            {mode === 'BOM_OUT' ? <Layers className="text-yellow-400" /> : <Package className="text-blue-400" />}
-                            {mode === 'BOM_OUT' ? '主件資訊' : '料件資訊'}
+                            {mode === 'BOM_OUT' ? (
+                                <Layers className="text-yellow-400" />
+                            ) : mode === 'MO_OUT' ? (
+                                <ClipboardList className="text-violet-400" />
+                            ) : (
+                                <Package className="text-blue-400" />
+                            )}
+                            {mode === 'BOM_OUT' ? '主件資訊' : mode === 'MO_OUT' ? '製令領料資訊' : '料件資訊'}
                         </h3>
 
 
@@ -627,6 +948,121 @@ const Operations = () => {
                                 <div className="text-center text-gray-500 py-10">
                                     <Scan size={48} className="mx-auto mb-4 opacity-20" />
                                     <p>請掃描或輸入主件條碼</p>
+                                </div>
+                            )
+                        ) : mode === 'MO_OUT' ? (
+                            moOutData.isActive ? (
+                                <div className="space-y-4">
+                                    <div className="p-4 bg-gray-700/50 rounded-xl mb-4">
+                                        <span className="text-gray-400 text-xs uppercase tracking-wider">材料領取進度（含本次暫存）</span>
+                                    </div>
+                                    <ul className="space-y-2">
+                                        {moOutData.lines.map((line, idx) => {
+                                            const picked = line.picked_qty_db + line.picked_session;
+                                            const isWaived = (moOutData.skipped_barcodes || []).includes(line.material_barcode);
+                                            const rem = isWaived ? 0 : Math.max(0, line.required_qty - picked);
+                                            const isDone = isWaived || picked >= line.required_qty;
+                                            const stagedForLine = (moOutData.staged_picks || []).some((p) => p.barcode === line.material_barcode);
+                                            const isWarning =
+                                                line.current_stock <
+                                                Math.max(0, line.required_qty - line.picked_qty_db);
+                                            return (
+                                                <li
+                                                    key={idx}
+                                                    className={clsx(
+                                                        'border p-3 rounded-lg text-sm transition-colors',
+                                                        isDone ? 'bg-green-500/10 border-green-500/30' : 'bg-gray-900 border-gray-600'
+                                                    )}
+                                                >
+                                                    <div className="flex justify-between items-center mb-1 gap-2">
+                                                        <span className="font-mono text-blue-300">{line.material_barcode}</span>
+                                                        <span className="text-xs text-gray-500 truncate text-right">{line.material_name}</span>
+                                                    </div>
+                                                    <div className="text-xs text-gray-500 mt-1">
+                                                        需領(AK)：{line.required_qty}　已領(AL+暫存)：{picked.toFixed(4)}　剩餘：{rem.toFixed(4)}
+                                                    </div>
+                                                    <div className="flex justify-between items-start mt-2 gap-2">
+                                                        <div className="flex flex-col min-w-0">
+                                                            <span className={clsx('text-xs', isWarning ? 'text-red-400 font-bold' : 'text-gray-400')}>
+                                                                總庫存: {line.current_stock}
+                                                            </span>
+                                                            <span className="text-xs text-gray-400 mt-1">儲位: {line.locations || '無'}</span>
+                                                            {isWaived && (
+                                                                <span className="mt-2 text-xs font-bold text-amber-300 bg-amber-500/15 border border-amber-500/30 px-2 py-1 rounded w-fit">
+                                                                    略過不扣帳（結案時寫紀錄並加已領）
+                                                                </span>
+                                                            )}
+                                                            {!isDone && !isWaived && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleSkipMoLine(line.material_barcode)}
+                                                                    disabled={stagedForLine}
+                                                                    title={stagedForLine ? '請先確認或取消／勿與暫存並用' : undefined}
+                                                                    className={clsx(
+                                                                        'mt-2 text-xs px-2 py-1 rounded transition-colors border w-fit',
+                                                                        stagedForLine
+                                                                            ? 'opacity-40 cursor-not-allowed border-gray-600 text-gray-500'
+                                                                            : 'bg-amber-900/40 hover:bg-amber-800/60 border-amber-600/40 text-amber-200'
+                                                                    )}
+                                                                >
+                                                                    略過(不扣帳)
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                        <div className="text-right shrink-0">
+                                                            <span className="text-xs text-gray-400">進度 </span>
+                                                            <span className={clsx('font-bold text-lg', isDone ? 'text-green-400' : 'text-violet-400')}>
+                                                                {isWaived ? line.required_qty : picked}
+                                                            </span>
+                                                            <span className="text-gray-500"> / {line.required_qty}</span>
+                                                        </div>
+                                                    </div>
+                                                </li>
+                                            );
+                                        })}
+                                    </ul>
+                                </div>
+                            ) : moInfo ? (
+                                <div className="space-y-4">
+                                    <div className="p-4 bg-gray-700/50 rounded-xl">
+                                        <span className="text-gray-400 text-xs uppercase tracking-wider">製令編號</span>
+                                        <div className="text-lg font-bold text-violet-400 font-mono">{moInfo.work_order_no}</div>
+                                        {moInfo.open_date && (
+                                            <div className="text-sm text-gray-400 mt-1">開單日期(Q)：{moInfo.open_date}</div>
+                                        )}
+                                    </div>
+                                    <div>
+                                        <span className="text-gray-400 text-xs uppercase tracking-wider mb-2 block">材料清單</span>
+                                        <ul className="space-y-2">
+                                            {moInfo.lines.map((ln, idx) => (
+                                                <li key={idx} className="bg-gray-900 border border-gray-600 p-3 rounded-lg text-sm">
+                                                    <div className="flex justify-between mb-1 gap-2">
+                                                        <span className="font-mono text-blue-300">{ln.material_barcode}</span>
+                                                        <span className="text-xs text-gray-500 truncate">{ln.material_name}</span>
+                                                    </div>
+                                                    <div className="text-xs text-gray-400 mt-1">
+                                                        需領：{ln.required_qty}　已領：{ln.picked_qty}　剩餘領取：
+                                                        {Math.max(0, Number(ln.required_qty) - Number(ln.picked_qty))}
+                                                    </div>
+                                                    <div
+                                                        className={clsx(
+                                                            'text-xs mt-1',
+                                                            (ln.current_stock ?? 0) < Math.max(0, Number(ln.required_qty) - Number(ln.picked_qty))
+                                                                ? 'text-red-400 font-bold'
+                                                                : 'text-gray-400'
+                                                        )}
+                                                    >
+                                                        總庫存 {ln.current_stock ?? 0}　儲位 {ln.locations || '無'}
+                                                    </div>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="text-center text-gray-500 py-10">
+                                    <ClipboardList size={48} className="mx-auto mb-4 opacity-20" />
+                                    <p>請輸入製令編號</p>
                                 </div>
                             )
                         ) : itemInfo ? (

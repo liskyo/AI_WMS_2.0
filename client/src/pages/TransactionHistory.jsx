@@ -7,6 +7,12 @@ import clsx from 'clsx';
 import { useAuth } from '../context/AuthContext';
 import { EXPORT_FAILED, EXPORT_NO_ROWS, DELETE_VOID_FAILED, axiosErrorDetail } from '../userFacingMessages';
 
+function parseMoNoFromRef(refOrder) {
+    if (!refOrder || typeof refOrder !== 'string') return '—';
+    const m = refOrder.trim().match(/^製令:([^|]+)/);
+    const n = m ? m[1].trim() : '';
+    return n || '—';
+}
 const TransactionHistory = () => {
     const [transactions, setTransactions] = useState([]);
     const [totalCount, setTotalCount] = useState(0);
@@ -23,6 +29,8 @@ const TransactionHistory = () => {
     const [isDeleting, setIsDeleting] = useState(false);
     const { user } = useAuth();
 
+    /** 'standard' — 不含製令；'mo' — 僅製令相關 ref */
+    const [listKind, setListKind] = useState('standard');
     useEffect(() => {
         const t = setTimeout(() => setDebouncedSearch(searchTerm), 300);
         return () => clearTimeout(t);
@@ -32,11 +40,15 @@ const TransactionHistory = () => {
         setCurrentPage(1);
     }, [searchTerm]);
 
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [listKind]);
     const fetchTransactions = useCallback(async () => {
         setLoading(true);
         try {
             const res = await api.get('/transactions', {
                 params: {
+                    kind: listKind === 'mo' ? 'mo' : 'standard',
                     q: debouncedSearch.trim() || undefined,
                     limit: itemsPerPage,
                     offset: (currentPage - 1) * itemsPerPage,
@@ -54,7 +66,7 @@ const TransactionHistory = () => {
         } finally {
             setLoading(false);
         }
-    }, [currentPage, debouncedSearch, itemsPerPage]);
+    }, [currentPage, debouncedSearch, itemsPerPage, listKind]);
 
     useEffect(() => {
         fetchTransactions();
@@ -64,6 +76,7 @@ const TransactionHistory = () => {
         try {
             const res = await api.get('/transactions', {
                 params: {
+                    kind: listKind === 'mo' ? 'mo' : 'standard',
                     q: debouncedSearch.trim() || undefined,
                     limit: 25000,
                     offset: 0,
@@ -76,23 +89,31 @@ const TransactionHistory = () => {
                 return;
             }
 
-            const data = rows.map(t => ({
-                '時間': new Date(t.timestamp).toLocaleString(),
-                '動作': t.type === 'IN' ? '入庫' : '出庫',
-                '狀態': t.is_deleted ? '已刪除' : '正常',
-                '料件條碼': t.barcode,
-                '料件名稱': t.item_name,
-                '儲位': t.location_code,
-                '數量': t.quantity,
-                '工號': t.employee_id || '-',
-                '經手人': t.user_name || '-',
-                '刪除者': t.deleter_name || '-'
-            }));
+            const data = rows.map((t) => {
+                const row = {
+                    '時間': new Date(t.timestamp).toLocaleString(),
+                    '動作': t.type === 'IN' ? '入庫' : '出庫',
+                    '狀態': t.is_deleted ? '已刪除' : '正常',
+                    '料件條碼': t.barcode,
+                    '料件名稱': t.item_name,
+                    '儲位': t.location_code,
+                    '數量': t.quantity,
+                    '工號': t.employee_id || '-',
+                    '經手人': t.user_name || '-',
+                    '刪除者': t.deleter_name || '-',
+                };
+                if (listKind === 'mo') {
+                    row['製令編號'] = parseMoNoFromRef(t.ref_order);
+                    row['略過不扣帳'] = Number(t.mo_skip) === 1 ? '是' : '否';
+                    row['關聯備註'] = t.ref_order || '';
+                }
+                return row;
+            });
 
             const ws = XLSX.utils.json_to_sheet(data);
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'Transactions');
-            XLSX.writeFile(wb, `WMS_Transactions_${new Date().toISOString().split('T')[0]}.xlsx`);
+            XLSX.writeFile(wb, `${listKind === 'mo' ? 'WMS_MO_Transactions' : 'WMS_Transactions'}_${new Date().toISOString().split('T')[0]}.xlsx`);
         } catch (err) {
             console.error('Export failed:', err);
             alert(EXPORT_FAILED);
@@ -128,13 +149,45 @@ const TransactionHistory = () => {
 
     const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
     const canDelete = user?.group_name === '管理者' || (user?.permissions && user.permissions.includes('ALL'));
+    const moTab = listKind === 'mo';
+    const tableColSpan = moTab ? (canDelete ? 9 : 8) : canDelete ? 8 : 7;
 
     return (
         <div className="space-y-6">
             <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                    <h2 className="text-3xl font-bold text-white mb-2">出入庫紀錄</h2>
-                    <p className="text-gray-400">查看所有詳細的出入庫歷史與經手人員</p>
+                <div className="w-full md:w-auto space-y-2">
+                    <h2 className="text-3xl font-bold text-white mb-1">出入庫紀錄</h2>
+                    <div className="inline-flex rounded-lg bg-gray-800/90 p-1 border border-gray-700 gap-1">
+                        <button
+                            type="button"
+                            onClick={() => setListKind('standard')}
+                            className={clsx(
+                                'px-4 py-2 rounded-md text-sm font-bold transition-colors',
+                                listKind === 'standard'
+                                    ? 'bg-blue-600 text-white shadow-md'
+                                    : 'text-gray-400 hover:text-white hover:bg-gray-700/70'
+                            )}
+                        >
+                            一般出入庫
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setListKind('mo')}
+                            className={clsx(
+                                'px-4 py-2 rounded-md text-sm font-bold transition-colors',
+                                listKind === 'mo'
+                                    ? 'bg-violet-600 text-white shadow-md'
+                                    : 'text-gray-400 hover:text-white hover:bg-gray-700/70'
+                            )}
+                        >
+                            製令工單出入庫
+                        </button>
+                    </div>
+                    <p className="text-gray-400">
+                        {listKind === 'mo'
+                            ? '僅列出 ref 為製令之相關交易；可查製令編號與「略過不扣帳」列。管理者作廢可還原庫存並調整已領用量（略過紀錄不還原庫存）。'
+                            : '一般入出庫與報廢等非製令紀錄。'}
+                    </p>
                 </div>
                 <div className="flex gap-3">
                     <button
@@ -152,7 +205,11 @@ const TransactionHistory = () => {
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
                     <input
                         type="text"
-                        placeholder="搜尋條碼、料件名稱、儲位、工號或姓名..."
+                        placeholder={
+                            listKind === 'mo'
+                                ? '搜尋製令備註、條碼、料號、料名、儲位、經手人…'
+                                : '搜尋條碼、料件名稱、儲位、工號或姓名…'
+                        }
                         className="w-full bg-gray-900 border border-gray-700 text-white pl-10 pr-4 py-3 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
@@ -168,6 +225,7 @@ const TransactionHistory = () => {
                             <tr className="bg-gray-900/50 border-b border-gray-700 text-gray-400 text-sm uppercase tracking-wider">
                                 <th className="p-4 font-medium"><div className="flex items-center gap-2"><Clock size={16} /> 時間</div></th>
                                 <th className="p-4 font-medium"><div className="flex items-center gap-2">動作</div></th>
+                                {moTab && <th className="p-4 font-medium">製令編號</th>}
                                 <th className="p-4 font-medium"><div className="flex items-center gap-2"><Package size={16} /> 料件資訊</div></th>
                                 <th className="p-4 font-medium"><div className="flex items-center gap-2"><MapPin size={16} /> 儲位</div></th>
                                 <th className="p-4 font-medium text-right">數量</th>
@@ -179,11 +237,11 @@ const TransactionHistory = () => {
                         <tbody className="divide-y divide-gray-700/50">
                             {loading ? (
                                 <tr>
-                                    <td colSpan={canDelete ? 8 : 7} className="p-8 text-center text-gray-500">載入中...</td>
+                                    <td colSpan={tableColSpan} className="p-8 text-center text-gray-500">載入中...</td>
                                 </tr>
                             ) : transactions.length === 0 ? (
                                 <tr>
-                                    <td colSpan={canDelete ? 8 : 7} className="p-8 text-center text-gray-500">無符合的紀錄</td>
+                                    <td colSpan={tableColSpan} className="p-8 text-center text-gray-500">無符合的紀錄</td>
                                 </tr>
                             ) : (
                                 transactions.map((t) => (
@@ -192,7 +250,7 @@ const TransactionHistory = () => {
                                             {new Date(t.timestamp + (t.timestamp.includes('Z') ? '' : 'Z')).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false })}
                                         </td>
                                         <td className="p-4">
-                                            <div className="flex items-center gap-2">
+                                            <div className="flex items-center gap-2 flex-wrap">
                                                 <span className={clsx(
                                                     "px-3 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1",
                                                     t.type === 'IN' ? "bg-blue-500/20 text-blue-400" : "bg-orange-500/20 text-orange-400"
@@ -200,6 +258,11 @@ const TransactionHistory = () => {
                                                     {t.type === 'IN' ? <ArrowDownToLine size={12} /> : <ArrowUpFromLine size={12} />}
                                                     {t.type === 'IN' ? '入庫' : '出庫'}
                                                 </span>
+                                                {Number(t.mo_skip) === 1 && t.type === 'OUT' && (
+                                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/35">
+                                                        略過
+                                                    </span>
+                                                )}
                                                 {!!t.is_deleted && (
                                                     <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-500/20 text-red-400 border border-red-500/30">
                                                         已刪除
@@ -207,12 +270,20 @@ const TransactionHistory = () => {
                                                 )}
                                             </div>
                                         </td>
+                                        {moTab && (
+                                            <td className="p-4 font-mono text-violet-300 text-sm whitespace-nowrap">
+                                                {parseMoNoFromRef(t.ref_order)}
+                                            </td>
+                                        )}
                                         <td className="p-4">
                                             <div className={clsx("font-bold", t.is_deleted ? "text-gray-400 line-through" : "text-white")}>{t.item_name}</div>
                                             <div className="text-sm text-gray-500 font-mono">{t.barcode}</div>
                                         </td>
                                         <td className="p-4 font-mono text-yellow-400">
-                                            {t.location_code}
+                                            <span>{t.location_code}</span>
+                                            {Number(t.mo_skip) === 1 && (
+                                                <div className="text-xs text-amber-400 mt-1 font-sans whitespace-normal">（略過不扣帳）</div>
+                                            )}
                                         </td>
                                         <td className="p-4 text-right font-bold text-lg text-white">
                                             {t.quantity}
@@ -234,7 +305,13 @@ const TransactionHistory = () => {
                                                     <button
                                                         onClick={() => openDeleteModal(t)}
                                                         className="p-2 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
-                                                        title="刪除紀錄 (復原庫存)"
+                                                        title={
+                                                            moTab && t.type === 'OUT' && Number(t.mo_skip) === 1
+                                                                ? '作廢紀錄（調降已領用量，不復原庫存）'
+                                                                : moTab && t.type === 'OUT'
+                                                                    ? '作廢紀錄（復原庫存同一般出庫＋調降已領用量）'
+                                                                    : '刪除紀錄（復原庫存）'
+                                                        }
                                                     >
                                                         <Trash2 size={18} />
                                                     </button>
@@ -280,7 +357,13 @@ const TransactionHistory = () => {
 
             {/* Delete Confirmation Modal */}
             <AnimatePresence>
-                {deleteModalOpen && (
+                {deleteModalOpen && deleteTarget && (() => {
+                    const refStr = deleteTarget.ref_order != null ? String(deleteTarget.ref_order) : '';
+                    const voidIsMoPick = refStr.startsWith('製令:');
+                    const voidIsMoSkip = Number(deleteTarget.mo_skip) === 1;
+                    const voidIsOut = deleteTarget.type === 'OUT';
+                    const moShowNo = parseMoNoFromRef(refStr);
+                    return (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
                         <motion.div
                             initial={{ opacity: 0, scale: 0.95 }}
@@ -301,17 +384,23 @@ const TransactionHistory = () => {
                                     <div className="bg-gray-800 p-4 rounded-lg text-sm border border-gray-700">
                                         <div className="flex justify-between mb-1">
                                             <span className="text-gray-400">料件：</span>
-                                            <span className="text-white font-mono">{deleteTarget?.item_name}</span>
+                                            <span className="text-white font-mono">{deleteTarget.item_name}</span>
                                         </div>
+                                        {voidIsMoPick && (
+                                            <div className="flex justify-between mb-1">
+                                                <span className="text-gray-400">製令編號：</span>
+                                                <span className="text-violet-300 font-mono">{moShowNo}</span>
+                                            </div>
+                                        )}
                                         <div className="flex justify-between mb-1">
                                             <span className="text-gray-400">動作：</span>
-                                            <span className={clsx(deleteTarget?.type === 'IN' ? 'text-blue-400' : 'text-orange-400')}>
-                                                {deleteTarget?.type === 'IN' ? '入庫' : '出庫'} {deleteTarget?.quantity}
+                                            <span className={clsx(deleteTarget.type === 'IN' ? 'text-blue-400' : 'text-orange-400')}>
+                                                {deleteTarget.type === 'IN' ? '入庫' : '出庫'} {deleteTarget.quantity}
                                             </span>
                                         </div>
                                         <div className="flex justify-between">
                                             <span className="text-gray-400">時間：</span>
-                                            <span className="text-gray-400">{new Date(deleteTarget?.timestamp).toLocaleString()}</span>
+                                            <span className="text-gray-400">{new Date(deleteTarget.timestamp).toLocaleString()}</span>
                                         </div>
                                     </div>
 
@@ -319,7 +408,21 @@ const TransactionHistory = () => {
                                         <p>此操作將會：</p>
                                         <ul className="list-disc list-inside mt-1 space-y-1 opacity-90">
                                             <li>標記此紀錄為「已刪除」</li>
-                                            <li><strong>自動復原庫存數量</strong> (反向操作)</li>
+                                            {voidIsMoPick && voidIsOut ? (
+                                                voidIsMoSkip ? (
+                                                    <>
+                                                        <li><strong>調降該製令明細之已領用量</strong>（對應本次略過筆數）</li>
+                                                        <li>本次為「略過不扣帳」紀錄，<strong>不復原即時庫存</strong></li>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <li><strong>復原庫存</strong>（同一般出庫作業）</li>
+                                                        <li><strong>調降已領用量</strong>（對應該製令明細）</li>
+                                                    </>
+                                                )
+                                            ) : (
+                                                <li><strong>自動復原庫存數量</strong>（反向操作）</li>
+                                            )}
                                         </ul>
                                     </div>
 
@@ -369,7 +472,8 @@ const TransactionHistory = () => {
                             </div>
                         </motion.div>
                     </div>
-                )}
+                    );
+                })()}
             </AnimatePresence>
         </div>
     );

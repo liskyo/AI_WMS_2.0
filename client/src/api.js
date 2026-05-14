@@ -68,6 +68,16 @@ export const importBom = (bomData, token) => api.post('/admin/import/bom', { bom
 export const getBom = (main_barcode = '') => api.get(`/bom`, { params: { main_barcode } });
 export const submitBomTransaction = (data, token) => api.post('/transactions/bom-out', data, { headers: { Authorization: `Bearer ${token}` } });
 
+export const getWorkOrders = (q) => api.get('/work-orders', { params: q != null && String(q).trim() !== '' ? { q: String(q).trim() } : {} });
+export const getWorkOrderForOut = (work_order_no) =>
+    api.get('/work-orders/for-out', { params: { work_order_no } });
+export const submitMoOutTransaction = (data, token) =>
+    api.post('/transactions/mo-out', data, { headers: { Authorization: `Bearer ${token}` } });
+
+export const getWorkOrdersReport = () => api.get('/reports/work-orders');
+export const importWorkOrders = (lines, token) =>
+    api.post('/admin/import/work-orders', { lines }, { headers: { Authorization: `Bearer ${token}` } });
+
 // Stock check onsite records（盤點紀錄）
 export const postStockCheckRecords = (body, token) =>
     api.post('/stock-check/records', body, { headers: { Authorization: `Bearer ${token}` } });

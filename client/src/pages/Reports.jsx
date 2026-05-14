@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { getInventoryReport, deleteItem, getBom, updateSafeStock } from '../api';
+import { getInventoryReport, deleteItem, getBom, updateSafeStock, getWorkOrdersReport } from '../api';
 import * as XLSX from 'xlsx';
-import { Download, Layers, MapPin, Trash2, X, AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { Download, Layers, MapPin, Trash2, X, AlertTriangle, Eye, EyeOff, ClipboardList } from 'lucide-react';
 import { motion } from 'framer-motion';
 import {
     REPORT_DELETE_OK,
@@ -17,13 +17,14 @@ const Reports = () => {
     const [bomData, setBomData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchParams] = useSearchParams();
-    const [activeTab, setActiveTab] = useState('item'); // 'item', 'location', 'bom', 'low_stock'
+    const [activeTab, setActiveTab] = useState('item'); // 'item', 'location', 'bom', 'low_stock', 'work_order'
     const [activeFloor, setActiveFloor] = useState(null);
     const [currentPage, setCurrentPage] = useState(1);
     const itemsPerPage = 100;
 
     // Delete State
-    const [deleteTarget, setDeleteTarget] = useState(null); // { barcode, name }
+    const [woRows, setWoRows] = useState([]);
+    const [deleteTarget, setDeleteTarget] = useState(null);
     const [deletePassword, setDeletePassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -68,8 +69,23 @@ const Reports = () => {
     useEffect(() => {
         fetchReport();
         const tab = searchParams.get('tab');
-        if (['item', 'location', 'bom', 'low_stock'].includes(tab)) setActiveTab(tab);
+        if (['item', 'location', 'bom', 'low_stock', 'work_order'].includes(tab)) setActiveTab(tab);
     }, [searchParams, fetchReport]);
+
+    useEffect(() => {
+        if (activeTab !== 'work_order') return undefined;
+        let cancelled = false;
+        getWorkOrdersReport()
+            .then((res) => {
+                if (!cancelled) setWoRows(Array.isArray(res.data) ? res.data : []);
+            })
+            .catch(() => {
+                if (!cancelled) setWoRows([]);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [activeTab]);
 
     useEffect(() => {
         setCurrentPage(1);
@@ -115,6 +131,21 @@ const Reports = () => {
         () => itemSummary.filter(i => i.totalQty < i.safe_stock),
         [itemSummary]
     );
+
+    const workOrderGrouped = useMemo(() => {
+        const map = new Map();
+        for (const r of woRows) {
+            const wo = r.work_order_no != null ? String(r.work_order_no).trim() : '';
+            if (!wo) continue;
+            if (!map.has(wo)) {
+                map.set(wo, { work_order_no: wo, open_date: r.open_date ?? null, lines: [] });
+            }
+            map.get(wo).lines.push(r);
+        }
+        return [...map.values()].sort((a, b) =>
+            a.work_order_no.localeCompare(b.work_order_no, undefined, { numeric: true })
+        );
+    }, [woRows]);
 
     const locationSummary = useMemo(() => {
         const locMap = new Map();
@@ -227,6 +258,22 @@ const Reports = () => {
             const wsLow = XLSX.utils.json_to_sheet(wsLowStockData);
             XLSX.utils.book_append_sheet(wb, wsLow, "低於安全庫存總表");
             XLSX.writeFile(wb, `庫存報表_低於安全庫存_${dateStr}.xlsx`);
+        } else if (activeTab === 'work_order') {
+            const wsWo = XLSX.utils.json_to_sheet(
+                woRows.map((r) => ({
+                    製令編號: r.work_order_no,
+                    開單日期: r.open_date ?? '',
+                    材料品號及品名: `${r.material_barcode}｜${r.material_name || ''}`,
+                    需領用量: r.required_qty,
+                    已領用量: r.picked_qty,
+                    剩餘領取數量: r.remaining_pick ?? Math.max(0, Number(r.required_qty) - Number(r.picked_qty)),
+                    剩餘庫存: r.current_stock,
+                    安全庫存: r.safe_stock ?? 0,
+                    所在儲位: r.locations ?? '',
+                }))
+            );
+            XLSX.utils.book_append_sheet(wb, wsWo, '製令工單總表');
+            XLSX.writeFile(wb, `庫存報表_製令工單總表_${dateStr}.xlsx`);
         }
     };
 
@@ -288,6 +335,16 @@ const Reports = () => {
                     <AlertTriangle size={18} />
                     低於安全庫存總表
                 </button>
+                <button
+                    onClick={() => setActiveTab('work_order')}
+                    className={`flex items-center gap-2 px-6 py-3 rounded-t-xl transition-colors ${activeTab === 'work_order'
+                        ? 'bg-violet-600/20 text-violet-300 border-b-2 border-violet-500'
+                        : 'text-gray-400 hover:text-white hover:bg-gray-800'
+                        }`}
+                >
+                    <ClipboardList size={18} />
+                    製令工單總表
+                </button>
             </div>
 
             {/* Sub-tabs for Floors when activeTab === 'location' */}
@@ -334,6 +391,18 @@ const Reports = () => {
                                             <th className="p-4 text-right">安全庫存</th>
                                             <th className="p-4">所在儲位</th>
                                         </>
+                                    ) : activeTab === 'work_order' ? (
+                                        <>
+                                            <th className="p-4 pl-6 w-[200px] align-top">
+                                                <span className="block">製令編號(A)</span>
+                                                <span className="block text-[10px] uppercase font-normal text-gray-500 mt-1 normal-case tracking-normal">
+                                                    開單日期(Q)
+                                                </span>
+                                            </th>
+                                            <th className="p-4 align-top">
+                                                材料明細（材料品號＋品名、需領(AK)、已領(AL)、剩餘、剩餘庫存、安全庫存、所在儲位）
+                                            </th>
+                                        </>
                                     ) : (
                                         <>
                                             <th className="p-4 pl-6">儲位代碼</th>
@@ -350,6 +419,7 @@ const Reports = () => {
                                     else if (activeTab === 'low_stock') currentDataArray = lowStockSummary;
                                     else if (activeTab === 'location') currentDataArray = locationSummary;
                                     else if (activeTab === 'bom') currentDataArray = bomData.flatMap(bom => bom.components.map(comp => ({ bom, comp })));
+                                    else if (activeTab === 'work_order') currentDataArray = workOrderGrouped;
 
                                     const paginatedData = currentDataArray.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
@@ -465,6 +535,111 @@ const Reports = () => {
                                                 </td>
                                             </motion.tr>
                                         ));
+                                    } else if (activeTab === 'work_order') {
+                                        if (paginatedData.length === 0) {
+                                            return (
+                                                <tr>
+                                                    <td colSpan={2} className="p-8 text-center text-gray-500">
+                                                        無製令工單資料（請先於「資料匯入中心」匯入，或已全部領畢並自總表移除）
+                                                    </td>
+                                                </tr>
+                                            );
+                                        }
+                                        return paginatedData.map((g, idx) => (
+                                            <motion.tr
+                                                key={g.work_order_no}
+                                                initial={{ opacity: 0, y: 10 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                transition={{ delay: (idx % itemsPerPage) * 0.02 }}
+                                                className="hover:bg-gray-700/30 transition-colors border-b border-gray-800 last:border-b-0"
+                                            >
+                                                <td className="p-4 pl-6 font-mono align-top pt-6">
+                                                    <div className="text-violet-400 font-bold text-lg leading-tight">{g.work_order_no}</div>
+                                                    <div className="text-xs text-gray-500 mt-2">開單：{g.open_date ?? '—'}</div>
+                                                </td>
+                                                <td className="p-4 align-top">
+                                                    <div className="flex flex-col gap-2">
+                                                        {g.lines.map((line) => {
+                                                            const remaining =
+                                                                line.remaining_pick ??
+                                                                Math.max(0, Number(line.required_qty) - Number(line.picked_qty));
+                                                            return (
+                                                                <div
+                                                                    key={`${g.work_order_no}-${line.material_barcode}-${line.required_qty}`}
+                                                                    className="flex flex-col gap-3 bg-gray-800/60 p-3 rounded-lg border border-gray-700/50 hover:border-gray-600 transition-colors sm:flex-row sm:items-start sm:flex-wrap"
+                                                                >
+                                                                    <div className="min-w-0 shrink-0 sm:max-w-[240px]">
+                                                                        <span className="bg-violet-500/15 text-violet-300 px-2 py-1 rounded font-mono text-xs font-bold border border-violet-500/30">
+                                                                            {line.material_barcode}
+                                                                        </span>
+                                                                        <div className="text-gray-300 font-semibold text-sm mt-2">
+                                                                            {line.material_name || '—'}
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs sm:flex-1 sm:justify-center">
+                                                                        <span>
+                                                                            <span className="text-gray-500 block">需領(AK)</span>
+                                                                            <span className="text-white font-bold">{line.required_qty}</span>
+                                                                        </span>
+                                                                        <span>
+                                                                            <span className="text-gray-500 block">已領(AL)</span>
+                                                                            <span className="text-gray-300">{line.picked_qty}</span>
+                                                                        </span>
+                                                                        <span>
+                                                                            <span className="text-gray-500 block">剩餘</span>
+                                                                            <span className="text-amber-400 font-bold">{remaining}</span>
+                                                                        </span>
+                                                                        <span>
+                                                                            <span className="text-gray-500 block">剩餘庫存</span>
+                                                                            <span
+                                                                                className={`font-bold ${(line.current_stock ?? 0) < remaining ? 'text-red-400' : 'text-green-400'}`}
+                                                                            >
+                                                                                {line.current_stock ?? 0}
+                                                                            </span>
+                                                                        </span>
+                                                                        <span>
+                                                                            <span className="text-gray-500 block">安全庫存</span>
+                                                                            <span className="text-red-400 font-bold">{line.safe_stock ?? 0}</span>
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className="flex flex-wrap gap-2 min-w-[120px] sm:ml-auto sm:justify-end">
+                                                                        {line.locations ? (
+                                                                            String(line.locations)
+                                                                                .split(',')
+                                                                                .map((loc, i) => {
+                                                                                    const trimmed = loc.trim();
+                                                                                    const match =
+                                                                                        trimmed.match(/(.+?)\s*\((.+?)\)/) ||
+                                                                                        trimmed.match(/(.+?):(.+?)/);
+                                                                                    const code = match ? match[1] : trimmed;
+                                                                                    const qty = match ? match[2] : null;
+                                                                                    return (
+                                                                                        <span
+                                                                                            key={`${loc}-${i}`}
+                                                                                            className="bg-gray-900/50 border border-gray-600 px-2 py-1 rounded text-xs shrink-0"
+                                                                                        >
+                                                                                            {qty != null ? (
+                                                                                                <>
+                                                                                                    <span className="text-blue-300">{code}</span>
+                                                                                                    <span className="text-yellow-500 font-bold ml-[2px]">({qty})</span>
+                                                                                                </>
+                                                                                            ) : (
+                                                                                                <span className="text-blue-300">{code}</span>
+                                                                                            )}
+                                                                                        </span>
+                                                                                    );
+                                                                                })
+                                                                        ) : (
+                                                                            <span className="text-gray-600 text-sm">—</span>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </td>
+                                            </motion.tr>
+                                        ));
                                     } else {
                                         return paginatedData.map((loc, idx) => (
                                             <motion.tr
@@ -518,6 +693,7 @@ const Reports = () => {
                 else if (activeTab === 'low_stock') currentDataArray = lowStockSummary;
                 else if (activeTab === 'location') currentDataArray = locationSummary;
                 else if (activeTab === 'bom') currentDataArray = bomData.flatMap(bom => bom.components.map(comp => ({ bom, comp })));
+                else if (activeTab === 'work_order') currentDataArray = workOrderGrouped;
 
                 const totalItems = currentDataArray.length;
                 if (totalItems <= itemsPerPage) return null;
@@ -527,8 +703,8 @@ const Reports = () => {
                 return (
                     <div className="flex justify-between items-center bg-gray-800 p-4 rounded-xl border border-gray-700">
                         <span className="text-gray-400">
-                            顯示第 {(currentPage - 1) * itemsPerPage + 1} 到 {Math.min(currentPage * itemsPerPage, totalItems)} 筆，
-                            共 <span className="font-bold text-white">{totalItems}</span> 筆
+                            顯示第 {(currentPage - 1) * itemsPerPage + 1} 到 {Math.min(currentPage * itemsPerPage, totalItems)} {activeTab === 'work_order' ? '筆製令' : '筆'}，
+                            共 <span className="font-bold text-white">{totalItems}</span>{activeTab === 'work_order' ? ' 筆製令' : ' 筆'}
                         </span>
                         <div className="flex gap-2">
                             <button

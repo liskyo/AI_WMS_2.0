@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { importItems, importInventory, importLocations, importBom, renameFloor } from '../api';
+import { importItems, importInventory, importLocations, importBom, importWorkOrders, renameFloor } from '../api';
 import * as XLSX from 'xlsx';
 import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, ShieldCheck, Edit3 } from 'lucide-react';
 import {
@@ -54,7 +54,9 @@ const ImportPage = () => {
         if (previewData.length === 0) return;
 
         const isConfirmed = window.confirm(
-            "【警告】\n此匯入作業將會更新或完全「覆蓋」現有的資料庫紀錄。\n料件資料會更新現有紀錄，盤點庫存將會完全清空舊庫存並以新檔案為準。\n\n您確定要繼續匯入嗎？"
+            activeTab === 'workorders'
+                ? '【製令工單匯入】\n檔案中若出現與資料庫相同的「製令編號」，將刪除該製令舊資料並以本次檔案內容覆蓋。\n若匯入後每筆材料「已領用量」皆等於「需領用量」，該製令將自動從總表移除。\n\n確定繼續？'
+                : "【警告】\n此匯入作業將會更新或完全「覆蓋」現有的資料庫紀錄。\n料件資料會更新現有紀錄，盤點庫存將會完全清空舊庫存並以新檔案為準。\n\n您確定要繼續匯入嗎？"
         );
         if (!isConfirmed) return;
 
@@ -93,6 +95,19 @@ const ImportPage = () => {
                 })).filter(i => i.barcode && i.location_code);
 
                 res = await importInventory(formatted, token);
+            } else if (activeTab === 'workorders') {
+                const formatted = previewData
+                    .map((row) => ({
+                        work_order_no: row['製令編號'] ?? row.work_order_no,
+                        open_date: row['開單日期'] ?? row.open_date ?? '',
+                        material_barcode: row['材料品號'] ?? row.material_barcode,
+                        material_name: row['品名_1'] ?? row['材料品名'] ?? row.material_name ?? '',
+                        required_qty: row['需領用量'] ?? row.required_qty,
+                        picked_qty: row['已領用量'] ?? row.picked_qty ?? 0,
+                    }))
+                    .filter((i) => i.work_order_no && i.material_barcode);
+
+                res = await importWorkOrders(formatted, token);
             } else if (activeTab === 'locations') {
                 // Locations: 2D Grid
                 const locationsToInsert = [];
@@ -173,6 +188,18 @@ const ImportPage = () => {
         } else if (activeTab === 'bom') {
             data = [{ "主件品號": "M001", "元件品號": "A001", "品名": "可選(不匯入)", "規格": "可選(不匯入)", "單/複數單位": "單一", "取替代品群組": "Group1", "屬性": "廠內", "組成用量": 2 }];
             name = "主件匯入範本.xlsx";
+        } else if (activeTab === 'workorders') {
+            data = [
+                {
+                    製令編號: '5101-20260508002',
+                    開單日期: '2026/05/08',
+                    材料品號: '12KRC-0I4710-00R',
+                    品名_1: 'CPU SK 4710 E2A CARRIER/GREY',
+                    需領用量: 512,
+                    已領用量: 0,
+                },
+            ];
+            name = '製令工單清單匯入範本.xlsx';
         } else if (activeTab === 'inventory') {
             data = [{ "元件品號": "A001", "品名": "測試商品", "規格": "備註/包裝規格", "儲位代碼": "4A-01-3", "數量": 10 }];
             name = "盤點匯入範本.xlsx";
@@ -238,6 +265,20 @@ const ImportPage = () => {
                                 <div className="text-left">
                                     <div className="font-bold">匯入主件主檔</div>
                                     <div className="text-xs opacity-70">建立主件與元件BOM關係</div>
+                                </div>
+                            </button>
+
+                            <button
+                                onClick={() => { setActiveTab('workorders'); setPreviewData([]); setImportStatus(null); }}
+                                className={`p-4 rounded-xl border flex items-center gap-3 transition-colors ${activeTab === 'workorders'
+                                    ? 'bg-violet-600/20 border-violet-500 text-violet-300'
+                                    : 'bg-gray-900 border-gray-700 text-gray-400 hover:bg-gray-700'
+                                    }`}
+                            >
+                                <div className="bg-violet-500/20 p-2 rounded-lg"><FileSpreadsheet size={20} /></div>
+                                <div className="text-left">
+                                    <div className="font-bold">匯入製令工單</div>
+                                    <div className="text-xs opacity-70">同製令編號覆蓋 · 格式同清單範本</div>
                                 </div>
                             </button>
 

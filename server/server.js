@@ -99,6 +99,19 @@ const initDb = () => {
       UNIQUE(main_barcode, component_barcode)
     );
 
+    CREATE TABLE IF NOT EXISTS work_order_lines (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_order_no TEXT NOT NULL,
+      open_date TEXT,
+      material_barcode TEXT NOT NULL,
+      material_name TEXT,
+      required_qty REAL NOT NULL DEFAULT 0,
+      picked_qty REAL NOT NULL DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(work_order_no, material_barcode)
+    );
+
     CREATE TABLE IF NOT EXISTS stock_check_records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -193,6 +206,12 @@ const initDb = () => {
       db.prepare('ALTER TABLE locations ADD COLUMN closed_reason TEXT').run();
       console.log('Migration: Added closed_reason to locations table.');
     }
+
+    const txColsAfter = db.prepare('PRAGMA table_info(transactions)').all();
+    if (!txColsAfter.some((col) => col.name === 'mo_skip')) {
+      db.prepare('ALTER TABLE transactions ADD COLUMN mo_skip INTEGER DEFAULT 0').run();
+      console.log('Migration: Added mo_skip to transactions table.');
+    }
   } catch (err) {
     console.warn('Migration specific error:', err);
   }
@@ -206,6 +225,7 @@ const initDb = () => {
       CREATE INDEX IF NOT EXISTS idx_transactions_item ON transactions(item_id);
       CREATE INDEX IF NOT EXISTS idx_stock_check_created ON stock_check_records(created_at);
       CREATE INDEX IF NOT EXISTS idx_stock_check_location ON stock_check_records(location_code);
+      CREATE INDEX IF NOT EXISTS idx_work_order_lines_no ON work_order_lines(work_order_no);
     `);
   } catch (idxErr) {
     console.warn('Index creation note:', idxErr.message);
@@ -275,6 +295,109 @@ const seedLocations = () => {
 };
 
 initDb();
+
+const QTY_EPS = 1e-6;
+
+function getSystemMoSkipLocationId() {
+  const row = db.prepare("SELECT id FROM locations WHERE code = 'SYSTEM-MO-SKIP'").get();
+  if (row) return row.id;
+  const info = db
+    .prepare(
+      `INSERT INTO locations (code, type, x, y, floor, is_closed, closed_reason) VALUES ('SYSTEM-MO-SKIP', 'INTERNAL', -1, -1, '系統', 0, NULL)`
+    )
+    .run();
+  return Number(info.lastInsertRowid);
+}
+
+function isWorkOrderFullyPickedRows(rows) {
+  return rows.length > 0 && rows.every((l) => Number(l.picked_qty) >= Number(l.required_qty) - QTY_EPS);
+}
+
+function parseWorkOrderNoFromRef(ref) {
+  if (ref == null) return null;
+  const s = String(ref);
+  if (!s.startsWith('製令:')) return null;
+  const rest = s.slice(3);
+  const pipe = rest.indexOf('|');
+  return pipe >= 0 ? rest.slice(0, pipe) : rest;
+}
+
+/** @returns {Map<string, { current_stock: number, locations: string, safe_stock: number, name: string | null, item_id: number | null }>} */
+function stockInfoByBarcodes(barcodes) {
+  const unique = [...new Set(barcodes.map((b) => String(b || '').trim()).filter(Boolean))];
+  const result = new Map();
+  if (unique.length === 0) return result;
+
+  const ph = unique.map(() => '?').join(',');
+  const items = db
+    .prepare(`SELECT id, barcode, name, safe_stock FROM items WHERE barcode IN (${ph})`)
+    .all(...unique);
+  const byBarcode = new Map(items.map((it) => [it.barcode, it]));
+
+  const itemIds = items.map((i) => i.id);
+  const stockById = new Map();
+  const locStrById = new Map();
+  if (itemIds.length > 0) {
+    const phId = itemIds.map(() => '?').join(',');
+    const stocks = db
+      .prepare(`SELECT item_id, IFNULL(SUM(quantity), 0) as total FROM inventory WHERE item_id IN (${phId}) GROUP BY item_id`)
+      .all(...itemIds);
+    for (const s of stocks) stockById.set(s.item_id, s.total);
+
+    const locRows = db
+      .prepare(
+        `
+      SELECT inv.item_id, l.code, SUM(inv.quantity) as qty
+      FROM inventory inv
+      JOIN locations l ON inv.location_id = l.id
+      WHERE inv.quantity > 0 AND inv.item_id IN (${phId})
+      GROUP BY inv.item_id, l.code
+    `
+      )
+      .all(...itemIds);
+    const partsByItem = new Map();
+    for (const lr of locRows) {
+      if (!partsByItem.has(lr.item_id)) partsByItem.set(lr.item_id, []);
+      partsByItem.get(lr.item_id).push(`${lr.code}:${lr.qty}`);
+    }
+    for (const [id, parts] of partsByItem) {
+      locStrById.set(id, parts.sort().join(','));
+    }
+  }
+
+  for (const b of unique) {
+    const it = byBarcode.get(b);
+    if (!it) {
+      result.set(b, { current_stock: 0, locations: '', safe_stock: 0, name: null, item_id: null });
+    } else {
+      result.set(b, {
+        current_stock: stockById.get(it.id) ?? 0,
+        locations: locStrById.get(it.id) || '',
+        safe_stock: it.safe_stock ?? 0,
+        name: it.name,
+        item_id: it.id
+      });
+    }
+  }
+  return result;
+}
+
+function enrichWorkOrderRows(rows) {
+  const stock = stockInfoByBarcodes(rows.map((r) => r.material_barcode));
+  return rows.map((r) => {
+    const s = stock.get(r.material_barcode) || { current_stock: 0, locations: '', safe_stock: 0, name: null };
+    const req = Number(r.required_qty);
+    const picked = Number(r.picked_qty);
+    return {
+      ...r,
+      current_stock: s.current_stock,
+      locations: s.locations,
+      safe_stock: s.safe_stock,
+      remaining_pick: Math.max(0, req - picked),
+      item_master_name: s.name
+    };
+  });
+}
 
 // --- API Endpoints ---
 
@@ -788,7 +911,9 @@ app.get('/api/transactions', (req, res) => {
     const limitCap = rawLimit > 0 ? Math.min(rawLimit, 25000) : 100;
     const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
     const q = (req.query.q || '').trim();
-    const wild = q ? `%${q}%` : null;
+    const wild = `%${q}%`;
+    const kindRaw = (req.query.kind || 'standard').trim().toLowerCase();
+    const moOnly = kindRaw === 'mo';
 
     const baseFrom = `
             FROM transactions t
@@ -797,18 +922,32 @@ app.get('/api/transactions', (req, res) => {
             LEFT JOIN users u ON t.user_id = u.id
             LEFT JOIN users u_del ON t.deleted_by = u_del.id
         `;
-    const whereClause = q
-      ? `WHERE (
+
+    const conds = [];
+    const params = [];
+
+    if (moOnly) {
+      conds.push(`t.ref_order LIKE '製令:%'`);
+    } else {
+      conds.push(
+        `(t.ref_order IS NULL OR TRIM(IFNULL(t.ref_order,'')) = '' OR t.ref_order NOT LIKE '製令:%')`
+      );
+    }
+
+    if (q) {
+      conds.push(`(
             i.barcode LIKE ? OR i.name LIKE ? OR l.code LIKE ?
             OR IFNULL(u.employee_id, '') LIKE ? OR IFNULL(u.name, '') LIKE ?
             OR IFNULL(u_del.name, '') LIKE ? OR IFNULL(u_del.employee_id, '') LIKE ?
-          )`
-      : '';
+            OR IFNULL(t.ref_order, '') LIKE ?
+          )`);
+      for (let k = 0; k < 8; k++) params.push(wild);
+    }
+
+    const whereClause = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
     const countSql = `SELECT COUNT(*) as cnt ${baseFrom} ${whereClause}`;
-    const countRow = q
-      ? db.prepare(countSql).get(wild, wild, wild, wild, wild, wild, wild)
-      : db.prepare(countSql).get();
+    const countRow = db.prepare(countSql).get(...params);
     const total = countRow.cnt;
 
     const dataSql = `
@@ -821,6 +960,8 @@ app.get('/api/transactions', (req, res) => {
                 i.barcode,
                 i.name as item_name,
                 l.code as location_code,
+                t.ref_order,
+                IFNULL(t.mo_skip, 0) as mo_skip,
                 u.employee_id,
                 u.name as user_name,
                 u_del.name as deleter_name,
@@ -830,9 +971,7 @@ app.get('/api/transactions', (req, res) => {
             ORDER BY t.timestamp DESC
             LIMIT ? OFFSET ?
         `;
-    const history = q
-      ? db.prepare(dataSql).all(wild, wild, wild, wild, wild, wild, wild, limitCap, offset)
-      : db.prepare(dataSql).all(limitCap, offset);
+    const history = db.prepare(dataSql).all(...params, limitCap, offset);
 
     res.json({ items: history, total, limit: limitCap, offset });
   } catch (err) {
@@ -991,27 +1130,50 @@ app.post('/api/admin/transactions/:id/void', (req, res) => {
       // Find current inventory
       const inv = db.prepare('SELECT * FROM inventory WHERE item_id = ? AND location_id = ?').get(tx.item_id, tx.location_id);
 
-      if (!inv) {
-        // Auto-create inventory record if missing (e.g. was 0)
-        if (tx.type === 'OUT') {
-          // Revert OUT -> Add back
-          db.prepare('INSERT INTO inventory (item_id, location_id, quantity) VALUES (?, ?, ?)').run(tx.item_id, tx.location_id, tx.quantity);
-        } else {
-          // Revert IN -> Remove. If no record, implies 0. 0 - qty = negative.
-          throw new Error(bi('無法還原此入庫紀錄：缺少庫存列且會導致負庫存', 'Cannot revert this inbound — missing inventory row (would go negative)'));
+      const woNo = tx.ref_order ? parseWorkOrderNoFromRef(tx.ref_order) : null;
+      const moSkip = Number(tx.mo_skip) === 1;
+      if (woNo && tx.type === 'OUT') {
+        const itemRow = db.prepare('SELECT barcode FROM items WHERE id = ?').get(tx.item_id);
+        const barcode = itemRow?.barcode;
+        if (barcode) {
+          const ln = db
+            .prepare('SELECT id, picked_qty FROM work_order_lines WHERE work_order_no = ? AND material_barcode = ?')
+            .get(woNo, barcode);
+          if (ln) {
+            const newPicked = Math.max(0, Number(ln.picked_qty) - Number(tx.quantity));
+            db.prepare('UPDATE work_order_lines SET picked_qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+              newPicked,
+              ln.id
+            );
+          }
         }
-      } else {
-        let newQty = inv.quantity;
-        if (tx.type === 'IN') {
-          // Revert IN: Remove quantity
-          newQty -= tx.quantity;
-          if (newQty < 0) throw new Error(bi('庫存不足，無法作廢此入庫紀錄', 'Insufficient inventory to void this inbound record'));
-        } else {
-          // Revert OUT: Add quantity back
-          newQty += tx.quantity;
-        }
+      }
 
-        db.prepare('UPDATE inventory SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newQty, inv.id);
+      let skipInventoryRevert = Boolean(tx.type === 'OUT' && woNo && moSkip);
+
+      if (!skipInventoryRevert) {
+        if (!inv) {
+          // Auto-create inventory record if missing (e.g. was 0)
+          if (tx.type === 'OUT') {
+            // Revert OUT -> Add back
+            db.prepare('INSERT INTO inventory (item_id, location_id, quantity) VALUES (?, ?, ?)').run(tx.item_id, tx.location_id, tx.quantity);
+          } else {
+            // Revert IN -> Remove. If no record, implies 0. 0 - qty = negative.
+            throw new Error(bi('無法還原此入庫紀錄：缺少庫存列且會導致負庫存', 'Cannot revert this inbound — missing inventory row (would go negative)'));
+          }
+        } else {
+          let newQty = inv.quantity;
+          if (tx.type === 'IN') {
+            // Revert IN: Remove quantity
+            newQty -= tx.quantity;
+            if (newQty < 0) throw new Error(bi('庫存不足，無法作廢此入庫紀錄', 'Insufficient inventory to void this inbound record'));
+          } else {
+            // Revert OUT: Add quantity back
+            newQty += tx.quantity;
+          }
+
+          db.prepare('UPDATE inventory SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newQty, inv.id);
+        }
       }
 
       // Mark as Deleted
@@ -1424,6 +1586,190 @@ app.get('/api/bom', (req, res) => {
   }
 });
 
+// 11b. Manufacturing work orders — list / query (for Inventory page)
+app.get('/api/work-orders', (req, res) => {
+  const q = req.query.q != null ? String(req.query.q).trim() : '';
+  try {
+    const rows = q
+      ? db
+        .prepare(
+          `
+      SELECT id, work_order_no, open_date, material_barcode, material_name, required_qty, picked_qty
+      FROM work_order_lines
+      WHERE work_order_no LIKE ?
+      ORDER BY work_order_no, material_barcode
+    `
+        )
+        .all(`%${q}%`)
+      : db
+        .prepare(
+          `
+      SELECT id, work_order_no, open_date, material_barcode, material_name, required_qty, picked_qty
+      FROM work_order_lines
+      ORDER BY work_order_no, material_barcode
+    `
+        )
+        .all();
+
+    const enriched = enrichWorkOrderRows(rows);
+    const byWo = new Map();
+    for (const row of enriched) {
+      if (!byWo.has(row.work_order_no)) {
+        byWo.set(row.work_order_no, { work_order_no: row.work_order_no, open_date: row.open_date, lines: [] });
+      }
+      const bucket = byWo.get(row.work_order_no);
+      if (row.open_date && !bucket.open_date) bucket.open_date = row.open_date;
+      bucket.lines.push(row);
+    }
+
+    res.json([...byWo.values()]);
+  } catch (err) {
+    console.error('List work orders error:', err);
+    res.status(500).json({ error: userFacingCatch(err.message) });
+  }
+});
+
+// 11c. Work order outbound — single WO detail with live stock (like BOM)
+app.get('/api/work-orders/for-out', (req, res) => {
+  const wo = req.query.work_order_no != null ? String(req.query.work_order_no).trim() : '';
+  if (!wo) return res.status(400).json({ error: bi('請提供製令編號 work_order_no', 'Missing query: work_order_no') });
+
+  try {
+    const rows = db
+      .prepare(
+        `
+      SELECT id, work_order_no, open_date, material_barcode, material_name, required_qty, picked_qty
+      FROM work_order_lines WHERE work_order_no = ? ORDER BY material_barcode
+    `
+      )
+      .all(wo);
+
+    if (!rows.length) {
+      return res.status(404).json({ error: bi('找不到此製令工單', 'Work order not found') });
+    }
+
+    if (isWorkOrderFullyPickedRows(rows)) {
+      return res.status(404).json({
+        error: bi(
+          '此製令已全部領料完畢，無法於「製令工單出庫」再開單（紀錄請至「製令工單出入庫紀錄／報表」查看；若要再領請重新匯入）',
+          'Work order fully picked — use history/report; re-import to pick again'
+        )
+      });
+    }
+
+    const open_date = rows[0].open_date || null;
+    const lines = enrichWorkOrderRows(rows);
+    res.json({ work_order_no: wo, open_date, lines });
+  } catch (err) {
+    console.error('Work order for-out error:', err);
+    res.status(500).json({ error: userFacingCatch(err.message) });
+  }
+});
+
+// 11d. Report: manufacturing work order sheet
+app.get('/api/reports/work-orders', (req, res) => {
+  try {
+    const rows = db
+      .prepare(
+        `
+      SELECT work_order_no, open_date, material_barcode, material_name, required_qty, picked_qty
+      FROM work_order_lines
+      ORDER BY work_order_no, material_barcode
+    `
+      )
+      .all();
+    const enriched = enrichWorkOrderRows(rows);
+    res.json(enriched);
+  } catch (err) {
+    console.error('Report work orders error:', err);
+    res.status(500).json({ error: userFacingCatch(err.message) });
+  }
+});
+
+// 11e. Import work orders — same WO number in file replaces all lines for that WO
+app.post('/api/admin/import/work-orders', requireAdmin, (req, res) => {
+  const { lines } = req.body;
+  if (!Array.isArray(lines)) {
+    return res.status(400).json({ error: bi('請求格式無效：需要 lines 陣列', 'Invalid body: expected lines array') });
+  }
+
+  try {
+    const affectedWos = new Set();
+    const processImport = db.transaction((data) => {
+      /** @type {Map<string, Map<string, any>>} */
+      const byWo = new Map();
+      for (const raw of data) {
+        const work_order_no = raw.work_order_no != null ? String(raw.work_order_no).trim() : '';
+        const material_barcode = raw.material_barcode != null ? String(raw.material_barcode).trim() : '';
+        if (!work_order_no || !material_barcode) continue;
+
+        let required_qty = parseFloat(raw.required_qty);
+        if (Number.isNaN(required_qty) || required_qty < 0) required_qty = 0;
+        let picked_qty = parseFloat(raw.picked_qty);
+        if (Number.isNaN(picked_qty) || picked_qty < 0) picked_qty = 0;
+        if (picked_qty > required_qty + QTY_EPS) picked_qty = required_qty;
+
+        const open_date = raw.open_date != null ? String(raw.open_date).trim() : '';
+        const material_name = raw.material_name != null ? String(raw.material_name).trim() : '';
+
+        if (!byWo.has(work_order_no)) byWo.set(work_order_no, new Map());
+        const matMap = byWo.get(work_order_no);
+        matMap.set(material_barcode, {
+          work_order_no,
+          open_date: open_date || null,
+          material_barcode,
+          material_name: material_name || null,
+          required_qty,
+          picked_qty
+        });
+      }
+
+      const delStmt = db.prepare('DELETE FROM work_order_lines WHERE work_order_no = ?');
+      const insStmt = db.prepare(
+        `
+        INSERT INTO work_order_lines (work_order_no, open_date, material_barcode, material_name, required_qty, picked_qty)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `
+      );
+
+      let inserted = 0;
+      let workOrderCount = 0;
+      for (const [wo, matMap] of byWo) {
+        delStmt.run(wo);
+        for (const row of matMap.values()) {
+          insStmt.run(
+            row.work_order_no,
+            row.open_date,
+            row.material_barcode,
+            row.material_name,
+            row.required_qty,
+            row.picked_qty
+          );
+          inserted++;
+        }
+        const chk = db
+          .prepare('SELECT required_qty, picked_qty FROM work_order_lines WHERE work_order_no = ?')
+          .all(wo);
+        if (chk.length > 0 && isWorkOrderFullyPickedRows(chk)) {
+          delStmt.run(wo);
+          inserted -= chk.length;
+        } else {
+          workOrderCount++;
+        }
+        affectedWos.add(wo);
+      }
+
+      return { inserted, workOrderCount };
+    });
+
+    const result = processImport(lines);
+    res.json({ success: true, count: result.inserted, work_orders: result.workOrderCount });
+  } catch (err) {
+    console.error('Import work orders error:', err);
+    res.status(500).json({ error: userFacingCatch(err.message) });
+  }
+});
+
 // 12. Transaction: BOM Outbound (Batch)
 app.post('/api/transactions/bom-out', (req, res) => {
   const { main_barcode, sets, staged_picks, ref_order } = req.body;
@@ -1493,6 +1839,171 @@ app.post('/api/transactions/bom-out', (req, res) => {
 
   } catch (err) {
     console.error('BOM Outbound Error:', err.message);
+    res.status(400).json({ error: userFacingCatch(err.message) });
+  }
+});
+
+// 13. Transaction: Manufacturing Work Order Outbound — removes WO from work_order_lines when fully picked (queries/reports exclude it)
+app.post('/api/transactions/mo-out', (req, res) => {
+  const { work_order_no, staged_picks = [], skipped_barcodes = [] } = req.body || {};
+  const picks = Array.isArray(staged_picks) ? staged_picks : [];
+  const skipped = [...new Set((Array.isArray(skipped_barcodes) ? skipped_barcodes : []).map((s) => String(s || '').trim()).filter(Boolean))];
+
+  let userId = null;
+  const authHeader = req.headers['authorization'];
+  if (authHeader) {
+    try {
+      const token = authHeader.split(' ')[1];
+      const payload = JSON.parse(Buffer.from(token, 'base64').toString('utf-8'));
+      userId = payload.id;
+    } catch (e) {
+      /* optional */
+    }
+  }
+
+  const wo = String(work_order_no || '').trim();
+  if (!wo || (picks.length === 0 && skipped.length === 0)) {
+    return res.status(400).json({
+      error: bi(
+        '請提供製令編號，且 staged_picks 與 skipped_barcodes 至少擇一有資料',
+        'work_order_no required; staged_picks or skipped_barcodes non-empty'
+      )
+    });
+  }
+
+  try {
+    const executeMoOut = db.transaction(() => {
+      const dbLines = db
+        .prepare('SELECT id, material_barcode, required_qty, picked_qty FROM work_order_lines WHERE work_order_no = ?')
+        .all(wo);
+      if (!dbLines.length) {
+        throw new Error(bi(`找不到製令 ${wo}`, `Work order ${wo} not found`));
+      }
+      if (isWorkOrderFullyPickedRows(dbLines)) {
+        throw new Error(
+          bi(`製令 ${wo} 已全部領畢`, `Work order ${wo} is already fully picked — re-import to open picks again`)
+        );
+      }
+
+      const lineByBarcode = new Map(dbLines.map((l) => [l.material_barcode, l]));
+
+      const sumsByBarcode = new Map();
+      for (const pick of picks) {
+        const bcode = pick.barcode != null ? String(pick.barcode).trim() : '';
+        const qty = parseFloat(pick.quantity);
+        if (!bcode || Number.isNaN(qty) || qty <= 0) {
+          throw new Error(bi('staged_picks 含有無效的料號或數量', 'staged_picks has invalid barcode or quantity'));
+        }
+        sumsByBarcode.set(bcode, (sumsByBarcode.get(bcode) || 0) + qty);
+      }
+
+      for (const bc of skipped) {
+        if (sumsByBarcode.has(bc)) {
+          throw new Error(
+            bi(`材料 ${bc} 不可同時掃描出庫與略過`, `Barcode ${bc}: cannot both pick and waive in same submit`)
+          );
+        }
+      }
+
+      for (const [barcode, sumQty] of sumsByBarcode) {
+        const ln = lineByBarcode.get(barcode);
+        if (!ln) throw new Error(bi(`材料 ${barcode} 不在此製令領料清單`, `Barcode ${barcode} is not on this work order`));
+        const remaining = Number(ln.required_qty) - Number(ln.picked_qty);
+        if (sumQty > remaining + QTY_EPS) {
+          throw new Error(
+            bi(
+              `材料 ${barcode} 領取數量超過剩餘（剩 ${remaining.toFixed(4)}，本次合計 ${sumQty}）`,
+              `Pick for ${barcode} exceeds remaining (${remaining}, batch total ${sumQty})`
+            )
+          );
+        }
+      }
+
+      const waiveByBarcode = new Map();
+      for (const bc of skipped) {
+        const ln = lineByBarcode.get(bc);
+        if (!ln) throw new Error(bi(`材料 ${bc} 不在此製令領料清單`, `Barcode ${bc} is not on this work order`));
+        const stagedAmt = sumsByBarcode.get(bc) || 0;
+        const waive = Number(ln.required_qty) - Number(ln.picked_qty) - stagedAmt;
+        if (waive <= QTY_EPS) {
+          throw new Error(
+            bi(`材料 ${bc} 無可略過之剩餘量`, `Barcode ${bc}: nothing left to waive (already picked)`)
+          );
+        }
+        waiveByBarcode.set(bc, waive);
+      }
+
+      const insertTx = db.prepare(
+        'INSERT INTO transactions (type, item_id, location_id, quantity, ref_order, user_id, mo_skip) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      );
+
+      for (const pick of picks) {
+        const qty = parseFloat(pick.quantity);
+        const barcode = String(pick.barcode).trim();
+        const location_code = pick.location_code != null ? String(pick.location_code).trim() : '';
+
+        const item = db.prepare('SELECT id, name FROM items WHERE barcode = ?').get(barcode);
+        if (!item) throw new Error(bi(`找不到料號：${barcode}`, `Item not found: ${barcode}`));
+
+        const location = db.prepare('SELECT * FROM locations WHERE code = ?').get(location_code);
+        if (!location) throw new Error(bi(`找不到儲位：${location_code}`, `Location not found: ${location_code}`));
+        if (location.is_closed) {
+          throw new Error(
+            bi(`儲位 ${location_code} 已關閉：${location.closed_reason || '無說明'}`, `Location ${location_code} is closed: ${location.closed_reason || '(no note)'}`)
+          );
+        }
+
+        const existingInv = db.prepare('SELECT * FROM inventory WHERE item_id = ? AND location_id = ?').get(item.id, location.id);
+        const existingQty = existingInv ? existingInv.quantity : 0;
+        if (existingQty < qty) {
+          throw new Error(
+            bi(`庫存不足：${barcode} 於 ${location_code} 僅 ${existingQty}，試扣 ${qty}`, `Insufficient stock at location`)
+          );
+        }
+
+        db.prepare('UPDATE inventory SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(existingQty - qty, existingInv.id);
+
+        insertTx.run('OUT', item.id, location.id, qty, `製令:${wo}`, userId, 0);
+      }
+
+      const skipLocId = getSystemMoSkipLocationId();
+      for (const [barcode, waiveQty] of waiveByBarcode) {
+        const item = db.prepare('SELECT id FROM items WHERE barcode = ?').get(barcode);
+        if (!item) throw new Error(bi(`找不到料號：${barcode}`, `Item not found: ${barcode}`));
+        insertTx.run('OUT', item.id, skipLocId, waiveQty, `製令:${wo}|略過`, userId, 1);
+      }
+
+      const upd = db.prepare('UPDATE work_order_lines SET picked_qty = picked_qty + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+      for (const [barcode, sumQty] of sumsByBarcode) {
+        const ln = lineByBarcode.get(barcode);
+        upd.run(sumQty, ln.id);
+      }
+      for (const [barcode, wq] of waiveByBarcode) {
+        const ln = lineByBarcode.get(barcode);
+        upd.run(wq, ln.id);
+      }
+
+      const afterLines = db
+        .prepare('SELECT required_qty, picked_qty FROM work_order_lines WHERE work_order_no = ?')
+        .all(wo);
+      const fully = isWorkOrderFullyPickedRows(afterLines);
+
+      if (fully) {
+        db.prepare('DELETE FROM work_order_lines WHERE work_order_no = ?').run(wo);
+      }
+
+      return {
+        success: true,
+        processedPickLines: picks.length,
+        processedSkips: skipped.length,
+        work_order_fully_picked: fully
+      };
+    });
+
+    const result = executeMoOut();
+    res.json(result);
+  } catch (err) {
+    console.error('MO outbound error:', err.message);
     res.status(400).json({ error: userFacingCatch(err.message) });
   }
 });
