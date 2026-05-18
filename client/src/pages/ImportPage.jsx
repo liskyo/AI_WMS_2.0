@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { importItems, importInventory, importLocations, importBom, importWorkOrders, renameFloor } from '../api';
+import { importItems, importInventory, importLocations, importBom, importWorkOrders, renameFloor, getInventoryCount, userLogin } from '../api';
 import * as XLSX from 'xlsx';
 import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, ShieldCheck, Edit3 } from 'lucide-react';
 import {
@@ -19,6 +19,7 @@ const ImportPage = () => {
     const [importStatus, setImportStatus] = useState(null); // { type: 'success'|'error', msg: '' }
     const [previewData, setPreviewData] = useState([]);
     const [previewMerges, setPreviewMerges] = useState([]);
+    const [importMode, setImportMode] = useState('overwrite'); // 'overwrite' | 'append'
 
     // Map Specific State
     const [floorNameInput, setFloorNameInput] = useState('新大樓4樓');
@@ -53,12 +54,38 @@ const ImportPage = () => {
     const executeImport = async () => {
         if (previewData.length === 0) return;
 
-        const isConfirmed = window.confirm(
-            activeTab === 'workorders'
-                ? '【製令工單匯入】\n檔案中若出現與資料庫相同的「製令編號」，將刪除該製令舊資料並以本次檔案內容覆蓋。\n若匯入後每筆材料「已領用量」皆等於「需領用量」，該製令將自動從總表移除。\n\n確定繼續？'
-                : "【警告】\n此匯入作業將會更新或完全「覆蓋」現有的資料庫紀錄。\n料件資料會更新現有紀錄，盤點庫存將會完全清空舊庫存並以新檔案為準。\n\n您確定要繼續匯入嗎？"
-        );
+        const confirmMsg = (() => {
+            if (activeTab === 'workorders') {
+                return '【製令工單匯入】\n檔案中若出現與資料庫相同的「製令編號」，將刪除該製令舊資料並以本次檔案內容覆蓋。\n若匯入後每筆材料「已領用量」皆等於「需領用量」，該製令將自動從總表移除。\n\n確定繼續？';
+            }
+            if (activeTab === 'inventory') {
+                return importMode === 'overwrite'
+                    ? '【直接覆寫】\n此操作將「清空」現有全部庫存，並以本次檔案內容為準重新建立。\n\n確定繼續？'
+                    : '【逐筆新增】\n此操作將保留現有庫存，並將本次檔案內的數量「疊加」至對應儲位。\n\n確定繼續？';
+            }
+            return '【警告】\n此匯入作業將會更新或完全「覆蓋」現有的資料庫紀錄。\n料件資料會更新現有紀錄，盤點庫存將會完全清空舊庫存並以新檔案為準。\n\n您確定要繼續匯入嗎？';
+        })();
+        const isConfirmed = window.confirm(confirmMsg);
         if (!isConfirmed) return;
+
+        if (activeTab === 'inventory') {
+            const password = window.prompt("此盤點庫存匯入為敏感操作。請再次輸入您的登入密碼以確認授權：");
+            if (password === null) return; // 使用者點擊取消
+            if (!password.trim()) {
+                alert("必須輸入密碼才能執行此敏感操作！");
+                return;
+            }
+            try {
+                const userStr = localStorage.getItem('user');
+                const user = userStr ? JSON.parse(userStr) : null;
+                const employeeId = user?.employee_id || 'admin';
+                
+                await userLogin(employeeId, password.trim());
+            } catch (err) {
+                alert("密碼驗證失敗！無法執行盤點庫存操作。");
+                return;
+            }
+        }
 
         try {
             let res;
@@ -88,13 +115,29 @@ const ImportPage = () => {
                 // Inventory: barcode, location_code, quantity
                 const formatted = previewData.map(row => ({
                     barcode: row['元件品號'] || row['barcode'],
-                    item_name: row['品名'] || row['item_name'], // Optional, for auto-create
-                    description: row['規格'] || row['description'],
                     location_code: row['儲位代碼'] || row['location_code'],
-                    quantity: row['數量'] || row['quantity']
+                    quantity: Number(row['數量'] ?? row['quantity'] ?? 0)
                 })).filter(i => i.barcode && i.location_code);
 
-                res = await importInventory(formatted, token);
+                // Append 模式：先取得現有筆數
+                let existingCount = 0;
+                if (importMode === 'append') {
+                    try {
+                        const cntRes = await getInventoryCount(token);
+                        existingCount = cntRes.data.count || 0;
+                    } catch (_) {}
+                }
+
+                res = await importInventory(formatted, token, { mode: importMode });
+
+                const added = res.data?.addedCount ?? res.data?.count ?? formatted.length;
+                const totalAfter = importMode === 'append' ? existingCount + added : added;
+                const msg = importMode === 'append'
+                    ? `現有庫存 ${existingCount} 筆，本次新增 ${added} 筆，新增後總數共 ${totalAfter} 筆。`
+                    : `已覆寫完成，現有庫存共 ${added} 筆。`;
+                setImportStatus({ type: 'success', msg });
+                setPreviewData([]);
+                return;
             } else if (activeTab === 'workorders') {
                 const formatted = previewData
                     .map((row) => ({
@@ -201,7 +244,7 @@ const ImportPage = () => {
             ];
             name = '製令工單清單匯入範本.xlsx';
         } else if (activeTab === 'inventory') {
-            data = [{ "元件品號": "A001", "品名": "測試商品", "規格": "備註/包裝規格", "儲位代碼": "4A-01-3", "數量": 10 }];
+            data = [{ "元件品號": "A001", "儲位代碼": "4A-01-3", "數量": 10 }];
             name = "盤點匯入範本.xlsx";
         } else {
             // locations
@@ -292,7 +335,7 @@ const ImportPage = () => {
                                 <div className="bg-purple-500/20 p-2 rounded-lg"><FileSpreadsheet size={20} /></div>
                                 <div className="text-left">
                                     <div className="font-bold">匯入盤點庫存</div>
-                                    <div className="text-xs opacity-70">覆蓋並重置現有庫存</div>
+                                    <div className="text-xs opacity-70">可選擇覆寫或逐筆新增</div>
                                 </div>
                             </button>
 
@@ -313,6 +356,37 @@ const ImportPage = () => {
 
                         <div className="mt-6 pt-6 border-t border-gray-700">
                             <h3 className="text-lg font-bold text-white mb-4">2. 下載範本</h3>
+
+                            {/* 盤點庫存：匯入模式選擇 */}
+                            {activeTab === 'inventory' && (
+                                <div className="mb-3 p-4 bg-purple-900/20 border border-purple-500/40 rounded-xl">
+                                    <p className="text-xs text-purple-300 font-semibold mb-2">⚠️ 選擇匯入模式（需帳密驗證）</p>
+                                    <label className="flex items-center gap-2 cursor-pointer py-1">
+                                        <input
+                                            type="radio"
+                                            name="inventoryImportMode"
+                                            value="overwrite"
+                                            checked={importMode === 'overwrite'}
+                                            onChange={() => setImportMode('overwrite')}
+                                            className="accent-purple-400"
+                                        />
+                                        <span className="text-gray-200 text-sm">直接覆寫（清空舊庫存，以本次為準）</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer py-1">
+                                        <input
+                                            type="radio"
+                                            name="inventoryImportMode"
+                                            value="append"
+                                            checked={importMode === 'append'}
+                                            onChange={() => setImportMode('append')}
+                                            className="accent-purple-400"
+                                        />
+                                        <span className="text-gray-200 text-sm">逐筆新增（保留舊庫存，疊加本次資料）</span>
+                                    </label>
+                                    <p className="text-xs text-gray-500 mt-1">範本格式：元件品號 ／ 儲位代碼 ／ 數量（三欄）</p>
+                                </div>
+                            )}
+
                             <button
                                 onClick={downloadTemplate}
                                 className="w-full border border-gray-600 hover:bg-gray-700 text-gray-300 py-2 rounded-lg transition-colors text-sm"

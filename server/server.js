@@ -1329,19 +1329,22 @@ app.post('/api/admin/import/items', requireAdmin, (req, res) => {
 
 // 9. Import Inventory
 app.post('/api/admin/import/inventory', requireAdmin, (req, res) => {
-  const { inventory } = req.body; // Expects array of { barcode, location_code, quantity }
+  const { inventory, mode = 'overwrite' } = req.body; // mode: 'overwrite' | 'append'
   if (!Array.isArray(inventory)) return res.status(400).json({ error: bi('請求資料格式無效', 'Invalid request body format — expected inventory array') });
 
   try {
     const processImport = db.transaction((data) => {
-      // Clear existing inventory for full stocktake overwrite
-      db.prepare('DELETE FROM inventory').run();
+      if (mode === 'overwrite') {
+        // 覆寫模式：清空所有庫存再寫入
+        db.prepare('DELETE FROM inventory').run();
+      }
 
+      let addedCount = 0;
       for (const row of data) {
         // Find Item
         let item = db.prepare('SELECT id FROM items WHERE barcode = ?').get(row.barcode);
         if (!item) {
-          // Auto-create item if missing (optional, but good for bulk import)
+          // Auto-create item if missing
           const info = db.prepare('INSERT INTO items (barcode, name) VALUES (?, ?)').run(row.barcode, row.item_name || `Item ${row.barcode}`);
           item = { id: info.lastInsertRowid };
         }
@@ -1350,23 +1353,38 @@ app.post('/api/admin/import/inventory', requireAdmin, (req, res) => {
         const location = db.prepare('SELECT id FROM locations WHERE code = ?').get(row.location_code);
         if (!location) continue; // Skip invalid locations
 
-        const existing = db.prepare('SELECT id FROM inventory WHERE item_id = ? AND location_id = ?').get(item.id, location.id);
+        const qty = Number(row.quantity) || 0;
+        const existing = db.prepare('SELECT id, quantity FROM inventory WHERE item_id = ? AND location_id = ?').get(item.id, location.id);
 
         if (existing) {
-          db.prepare('UPDATE inventory SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(row.quantity, existing.id);
+          const newQty = mode === 'append' ? existing.quantity + qty : qty;
+          db.prepare('UPDATE inventory SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newQty, existing.id);
         } else {
-          db.prepare('INSERT INTO inventory (item_id, location_id, quantity) VALUES (?, ?, ?)').run(item.id, location.id, row.quantity);
+          db.prepare('INSERT INTO inventory (item_id, location_id, quantity) VALUES (?, ?, ?)').run(item.id, location.id, qty);
         }
+        addedCount++;
       }
+      return addedCount;
     });
 
-    processImport(inventory);
-    res.json({ success: true, count: inventory.length });
+    const addedCount = processImport(inventory);
+    res.json({ success: true, count: inventory.length, addedCount });
   } catch (err) {
     console.error('Import Inventory Error:', err);
     res.status(500).json({ error: userFacingCatch(err.message) });
   }
 });
+
+// 9.1 Get Inventory Count (for import summary)
+app.get('/api/inventory/count', requireAdmin, (req, res) => {
+  try {
+    const row = db.prepare('SELECT COUNT(*) as count FROM inventory WHERE quantity > 0').get();
+    res.json({ count: row.count });
+  } catch (err) {
+    res.status(500).json({ error: userFacingCatch(err.message) });
+  }
+});
+
 
 // 9.5 Import Locations (Map)
 app.post('/api/admin/import/locations', requireAdmin, (req, res) => {
