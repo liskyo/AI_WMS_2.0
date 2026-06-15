@@ -167,6 +167,9 @@ const Dashboard = () => {
                         type="text"
                         value={searchQuery}
                         onChange={handleSearch}
+                        onFocus={(e) => e.target.select()}
+                        onClick={(e) => e.target.select()}
+                        onKeyDown={(e) => { if (e.key === 'Enter') e.target.select(); }}
                         placeholder="掃描或輸入料件條碼搜尋 (自動顯示)..."
                         className="w-full bg-gray-800 border border-gray-700 text-white pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />

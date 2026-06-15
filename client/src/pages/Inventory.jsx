@@ -106,6 +106,9 @@ const Inventory = () => {
                             }
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
+                            onFocus={(e) => e.target.select()}
+                            onClick={(e) => e.target.select()}
+                            onKeyDown={(e) => { if (e.key === 'Enter') e.target.select(); }}
                         />
                     </div>
                 </div>

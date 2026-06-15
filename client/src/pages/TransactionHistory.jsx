@@ -213,6 +213,9 @@ const TransactionHistory = () => {
                         className="w-full bg-gray-900 border border-gray-700 text-white pl-10 pr-4 py-3 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
+                        onFocus={(e) => e.target.select()}
+                        onClick={(e) => e.target.select()}
+                        onKeyDown={(e) => { if (e.key === 'Enter') e.target.select(); }}
                     />
                 </div>
             </div>
