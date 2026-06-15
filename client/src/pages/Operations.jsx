@@ -1112,32 +1112,34 @@ const Operations = () => {
                                 貼紙資訊
                             </h3>
 
-                            <div className="space-y-4 flex-grow bg-gray-900 border border-gray-600 p-5 rounded-xl font-mono text-sm shadow-inner printable-sticker">
-                                <div className="border-b border-gray-700 pb-2">
-                                    <span className="text-gray-500 inline-block w-24">元件品號:</span>
-                                    <span className="text-white font-bold text-lg">{barcode}</span>
-                                </div>
-                                <div className="border-b border-gray-700 pb-2">
-                                    <span className="text-gray-500 block mb-2">料件條碼:</span>
-                                    <div className="bg-white p-2 rounded flex justify-center">
+                            <div className="printable-sticker">
+                                <div className="sticker-barcode-section">
+                                    <div className="sticker-barcode-image">
                                         <img
                                             src={`https://bwipjs-api.metafloor.com/?bcid=code128&text=${encodeURIComponent(itemInfo.item.barcode)}&scale=2&height=10&includetext=true`}
                                             alt={itemInfo.item.barcode}
-                                            className="h-16 object-contain"
                                         />
                                     </div>
                                 </div>
-                                <div className="border-b border-gray-700 pb-2">
-                                    <span className="text-gray-500 inline-block w-24">品名:</span>
-                                    <span className="text-white font-medium text-lg">{itemInfo.item.name}</span>
-                                </div>
-                                <div className="border-b border-gray-700 pb-2">
-                                    <span className="text-gray-500 inline-block w-24">數量:</span>
-                                    <span className="text-yellow-400 font-bold text-2xl">{quantity || 0}</span>
-                                </div>
-                                <div>
-                                    <span className="text-gray-500 inline-block w-24">入庫日期:</span>
-                                    <span className="text-gray-300 font-bold text-lg">{new Date().toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-')}</span>
+                                <div className="sticker-details-section">
+                                    <div className="sticker-field sticker-details-full">
+                                        <span className="sticker-label">元件品號:</span>
+                                        <span className="sticker-value font-bold text-base md:text-lg">{barcode}</span>
+                                    </div>
+                                    <div className="sticker-field sticker-details-full">
+                                        <span className="sticker-label">品名:</span>
+                                        <span className="sticker-value font-medium text-sm md:text-base">{itemInfo.item.name}</span>
+                                    </div>
+                                    <div className="sticker-field">
+                                        <span className="sticker-label">數量:</span>
+                                        <span className="sticker-value qty-text">{quantity || 0}</span>
+                                    </div>
+                                    <div className="sticker-field">
+                                        <span className="sticker-label">入庫日期:</span>
+                                        <span className="sticker-value font-medium text-xs md:text-sm">
+                                            {new Date().toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-')}
+                                        </span>
+                                    </div>
                                 </div>
                             </div>
 

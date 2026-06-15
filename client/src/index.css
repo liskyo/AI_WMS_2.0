@@ -10,52 +10,185 @@ body {
   @apply bg-gray-900 text-white;
 }
 
+/* Screen Styles for Label Preview */
+.printable-sticker {
+  display: flex;
+  flex-direction: column;
+  background-color: #111827; /* bg-gray-900 */
+  border: 1px solid #4b5563; /* border-gray-600 */
+  padding: 1.25rem; /* p-5 */
+  border-radius: 0.75rem; /* rounded-xl */
+  font-family: monospace;
+  font-size: 0.875rem;
+  color: #fff;
+  width: 100%;
+  aspect-ratio: 75 / 50; /* Matches the 75x50mm sticker aspect ratio */
+  justify-content: space-between;
+  box-sizing: border-box;
+}
+
+.sticker-barcode-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.sticker-barcode-image {
+  background-color: white;
+  padding: 4px;
+  border-radius: 4px;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.sticker-barcode-image img {
+  height: 48px;
+  object-fit: contain;
+}
+
+.sticker-details-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.sticker-details-full {
+  grid-column: span 2;
+}
+
+.sticker-field {
+  display: flex;
+  align-items: baseline;
+  border-bottom: 1px solid #374151; /* border-gray-700 */
+  padding-bottom: 2px;
+}
+
+.sticker-label {
+  color: #9ca3af; /* text-gray-400 */
+  width: 4rem;
+  flex-shrink: 0;
+  font-size: 0.75rem;
+}
+
+.sticker-value {
+  color: #fff;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sticker-value.qty-text {
+  color: #facc15; /* text-yellow-400 */
+  font-weight: 700;
+  font-size: 1.25rem;
+}
+
 @media print {
+  @page {
+    size: 75mm 50mm;
+    margin: 0;
+  }
+
+  html, body {
+    width: 75mm !important;
+    height: 50mm !important;
+    overflow: hidden !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background-color: white !important;
+  }
+
   /* Hide everything by default */
   body * {
-    visibility: hidden;
+    visibility: hidden !important;
   }
 
-  /* Only show the sticker container and its children */
+  /* Only show the sticker and its children */
   .printable-sticker, .printable-sticker * {
-    visibility: visible;
+    visibility: visible !important;
   }
 
-  /* Reset layout for the sticker */
-  .print-sticker-container {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    margin: 0;
-    padding: 0;
-    border: none;
-    box-shadow: none;
-    background: none;
-  }
-
-  /* Expand the sticker for printing */
+  /* Snap the sticker to the viewport/page boundary */
   .printable-sticker {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    max-width: 400px; /* Suitable label size */
-    margin: 0;
-    padding: 20px;
-    border: 2px solid #000 !important;
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 75mm !important;
+    height: 50mm !important;
+    box-sizing: border-box !important;
+    margin: 0 !important;
+    padding: 3mm 4mm !important;
+    border: 1px solid #000 !important;
     background-color: white !important;
     color: black !important;
+    border-radius: 0 !important;
+    aspect-ratio: auto !important;
+    font-size: 8pt !important;
+    line-height: 1.2 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+    z-index: 9999999 !important;
   }
 
-  /* Ensure text colors are black in print */
-  .printable-sticker span {
-    color: black !important;
+  .sticker-barcode-section {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    margin-bottom: 1mm !important;
   }
 
-  /* Hide specific borders or backgrounds if necessary, make them suitable for B&W printing */
-  .printable-sticker .border-b {
-    border-color: #333 !important;
+  .sticker-barcode-image {
+    padding: 2px !important;
+    border-radius: 0 !important;
+    background-color: white !important;
+    display: flex !important;
+    justify-content: center !important;
+    width: 100% !important;
+  }
+
+  .sticker-barcode-image img {
+    height: 12mm !important;
+    object-fit: contain !important;
+  }
+
+  .sticker-details-section {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 1mm !important;
+  }
+
+  .sticker-details-full {
+    grid-column: span 2 !important;
+  }
+
+  .sticker-field {
+    display: flex !important;
+    align-items: baseline !important;
+    border-bottom: 1px solid #000 !important;
+    padding-bottom: 1px !important;
+  }
+
+  .sticker-label {
+    color: #000 !important;
+    width: 15mm !important;
+    flex-shrink: 0 !important;
+    font-size: 8pt !important;
+  }
+
+  .sticker-value {
+    color: #000 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  .sticker-value.qty-text {
+    color: #000 !important;
+    font-size: 11pt !important;
+    font-weight: bold !important;
   }
 
   /* Hide anything explicitly marked no-print */
