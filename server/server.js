@@ -1085,8 +1085,21 @@ app.put('/api/users/:id', requireAdmin, (req, res) => {
 app.delete('/api/users/:id', requireAdmin, (req, res) => {
   const { id } = req.params;
   if (id == 1) return res.status(400).json({ error: bi('無法刪除預設管理員', 'Cannot delete default admin account') });
-  db.prepare('DELETE FROM users WHERE id = ?').run(id);
-  res.json({ success: true });
+  try {
+    db.transaction(() => {
+      // 斷開交易紀錄與盤點紀錄的外鍵關聯，防止觸發 FOREIGN KEY constraint error
+      db.prepare('UPDATE transactions SET user_id = NULL WHERE user_id = ?').run(id);
+      db.prepare('UPDATE transactions SET deleted_by = NULL WHERE deleted_by = ?').run(id);
+      db.prepare('UPDATE stock_check_records SET user_id = NULL WHERE user_id = ?').run(id);
+      
+      // 執行刪除使用者
+      db.prepare('DELETE FROM users WHERE id = ?').run(id);
+    })();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete user error:', err);
+    res.status(500).json({ error: userFacingCatch(err.message) });
+  }
 });
 
 // 8. Transaction Voiding (Soft Delete)

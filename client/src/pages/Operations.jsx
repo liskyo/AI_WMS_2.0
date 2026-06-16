@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { submitTransaction, getItemDetails, getBom, submitBomTransaction, getWorkOrderForOut, submitMoOutTransaction } from '../api';
+import { submitTransaction, getItemDetails, getBom, submitBomTransaction, getWorkOrderForOut, submitMoOutTransaction, adminLogin, createItem } from '../api';
 import { Scan, ArrowDownToLine, ArrowUpFromLine, CheckCircle, AlertTriangle, Package, Layers, ClipboardList } from 'lucide-react';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -33,6 +33,20 @@ const Operations = () => {
     }); // IN or OUT or BOM_OUT
     const [barcode, setBarcode] = useState('');
     const [locationCode, setLocationCode] = useState('');
+
+    // 新增料件彈窗相關狀態
+    const [showAddModal, setShowAddModal] = useState(false);
+    const [addModalStep, setAddModalStep] = useState('PASSWORD'); // 'PASSWORD' | 'FORM'
+    const [adminPassword, setAdminPassword] = useState('');
+    const [addModalError, setAddModalError] = useState('');
+    const [newItemData, setNewItemData] = useState({
+        barcode: '',
+        name: '',
+        description: '',
+        unit: '',
+        category: '',
+        safe_stock: 0
+    });
     const [quantity, setQuantity] = useState('');
     const [locationMismatch, setLocationMismatch] = useState(false);
     const [quantityOverflow, setQuantityOverflow] = useState(false);
@@ -202,6 +216,68 @@ const Operations = () => {
             setItemInfo(res.data);
         } catch (e) {
             setItemInfo(null);
+        }
+    };
+
+    const handleOpenAddModal = () => {
+        setNewItemData({
+            barcode: barcode.trim(),
+            name: '',
+            description: '',
+            unit: '',
+            category: '',
+            safe_stock: 0
+        });
+        setAdminPassword('');
+        setAddModalError('');
+        setAddModalStep('PASSWORD');
+        setShowAddModal(true);
+    };
+
+    const handleVerifyPassword = async (e) => {
+        e.preventDefault();
+        if (!adminPassword.trim()) {
+            setAddModalError('請輸入密碼');
+            return;
+        }
+        setLoading(true);
+        setAddModalError('');
+        try {
+            const res = await adminLogin(adminPassword);
+            if (res.data && res.data.success) {
+                setAddModalStep('FORM');
+            } else {
+                setAddModalError('密碼驗證失敗');
+            }
+        } catch (err) {
+            setAddModalError(err.response?.data?.error || '密碼錯誤，請重新輸入');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleCreateItem = async (e) => {
+        e.preventDefault();
+        if (!newItemData.name.trim()) {
+            setAddModalError('請輸入品名');
+            return;
+        }
+        setLoading(true);
+        setAddModalError('');
+        try {
+            const res = await createItem(newItemData);
+            if (res.data && res.data.success) {
+                setShowAddModal(false);
+                setMessage({ type: 'success', text: `料件 ${newItemData.barcode} 新增成功，可繼續作業！` });
+                // 重新查詢料件資訊，更新畫面狀態以解鎖後續入庫欄位
+                await fetchItemInfo();
+            } else {
+                setAddModalError('新增失敗，請重試');
+            }
+        } catch (err) {
+            setAddModalError(err.response?.data?.error || '新增料件時發生錯誤');
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -738,9 +814,20 @@ const Operations = () => {
                                         />
                                     </div>
                                     {needsItemMaster && barcode && !itemInfo && !loading && (
-                                        <p className="mt-2 text-sm text-red-400 font-bold bg-red-500/10 p-2 rounded border border-red-500/20">
-                                            ⚠️ 總表內無此料件，無法作業！
-                                        </p>
+                                        <div className="mt-2 p-3 bg-red-500/10 rounded-xl border border-red-500/20">
+                                            <p className="text-sm text-red-400 font-bold">
+                                                ⚠️ 總表內無此料件，無法作業！
+                                            </p>
+                                            {(mode === 'IN' || mode === 'NO_STICKER_IN') && (
+                                                <button
+                                                    type="button"
+                                                    onClick={handleOpenAddModal}
+                                                    className="mt-2 text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg font-bold transition-all shadow"
+                                                >
+                                                    ➕ 新增此料件
+                                                </button>
+                                            )}
+                                        </div>
                                     )}
                                     {moPickActive && barcode.trim() && moOutData.lines.some((l) => l.material_barcode === barcode.trim()) && moBarcodeWaived && (
                                         <p className="mt-2 text-sm text-amber-300 font-bold bg-amber-500/10 p-2 rounded border border-amber-500/20">
@@ -1158,6 +1245,149 @@ const Operations = () => {
                     )}
                 </div>
             </div>
+
+            {/* 新增料件彈窗 */}
+            <AnimatePresence>
+                {showAddModal && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="bg-gray-900 border border-gray-700 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden"
+                        >
+                            <div className="p-6">
+                                {addModalStep === 'PASSWORD' ? (
+                                    <form onSubmit={handleVerifyPassword} className="space-y-4">
+                                        <h3 className="text-xl font-bold text-white mb-2">確認新增料件？</h3>
+                                        <p className="text-gray-400 text-sm">
+                                            系統總表查無此料件：<span className="text-blue-400 font-mono font-bold">{newItemData.barcode}</span>。如果要新增此料件，請輸入管理者密碼確認：
+                                        </p>
+                                        <div>
+                                            <input
+                                                type="password"
+                                                className="w-full bg-gray-800 border border-gray-600 text-white px-4 py-2.5 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                                value={adminPassword}
+                                                onChange={(e) => setAdminPassword(e.target.value)}
+                                                placeholder="請輸入管理者密碼..."
+                                                autoFocus
+                                                required
+                                            />
+                                            {addModalError && (
+                                                <p className="text-red-500 text-sm mt-1">{addModalError}</p>
+                                            )}
+                                        </div>
+                                        <div className="flex justify-end gap-3 pt-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowAddModal(false)}
+                                                className="px-4 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+                                            >
+                                                取消
+                                            </button>
+                                            <button
+                                                type="submit"
+                                                className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-bold transition-colors"
+                                                disabled={loading}
+                                            >
+                                                {loading ? '驗證中...' : '確認'}
+                                            </button>
+                                        </div>
+                                    </form>
+                                ) : (
+                                    <form onSubmit={handleCreateItem} className="space-y-4">
+                                        <h3 className="text-xl font-bold text-white mb-2">新增料件資訊</h3>
+                                        {addModalError && (
+                                            <p className="text-red-500 text-sm">{addModalError}</p>
+                                        )}
+                                        <div className="space-y-3">
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">元件品號 (Barcode)</label>
+                                                <input
+                                                    type="text"
+                                                    className="w-full bg-gray-800 border border-gray-700 text-gray-400 px-3 py-2 rounded-lg font-mono"
+                                                    value={newItemData.barcode}
+                                                    disabled
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">品名 (必填)</label>
+                                                <input
+                                                    type="text"
+                                                    className="w-full bg-gray-800 border border-gray-600 text-white px-3 py-2 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                                    value={newItemData.name}
+                                                    onChange={(e) => setNewItemData({ ...newItemData, name: e.target.value })}
+                                                    placeholder="請輸入品名..."
+                                                    autoFocus
+                                                    required
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">規格 (選填)</label>
+                                                <input
+                                                    type="text"
+                                                    className="w-full bg-gray-800 border border-gray-600 text-white px-3 py-2 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                                    value={newItemData.description}
+                                                    onChange={(e) => setNewItemData({ ...newItemData, description: e.target.value })}
+                                                    placeholder="請輸入規格描述..."
+                                                />
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <div>
+                                                    <label className="block text-xs text-gray-400 mb-1">單位 (選填)</label>
+                                                    <input
+                                                        type="text"
+                                                        className="w-full bg-gray-800 border border-gray-600 text-white px-3 py-2 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                                        value={newItemData.unit}
+                                                        onChange={(e) => setNewItemData({ ...newItemData, unit: e.target.value })}
+                                                        placeholder="例如: pcs, kg"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs text-gray-400 mb-1">類別 (選填)</label>
+                                                    <input
+                                                        type="text"
+                                                        className="w-full bg-gray-800 border border-gray-600 text-white px-3 py-2 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                                        value={newItemData.category}
+                                                        onChange={(e) => setNewItemData({ ...newItemData, category: e.target.value })}
+                                                        placeholder="例如: 電子件"
+                                                    />
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">安全庫存量 (選填)</label>
+                                                <input
+                                                    type="number"
+                                                    className="w-full bg-gray-800 border border-gray-600 text-white px-3 py-2 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono"
+                                                    value={newItemData.safe_stock}
+                                                    onChange={(e) => setNewItemData({ ...newItemData, safe_stock: parseInt(e.target.value) || 0 })}
+                                                    min="0"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="flex justify-end gap-3 pt-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowAddModal(false)}
+                                                className="px-4 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+                                            >
+                                                取消
+                                            </button>
+                                            <button
+                                                type="submit"
+                                                className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg font-bold transition-colors"
+                                                disabled={loading}
+                                            >
+                                                {loading ? '新增中...' : '確認新增'}
+                                            </button>
+                                        </div>
+                                    </form>
+                                )}
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
         </div>
     );
 };
