@@ -11,7 +11,7 @@ const Inventory = () => {
     const [search, setSearch] = useState('');
     const [loading, setLoading] = useState(false);
     const [currentPage, setCurrentPage] = useState(1);
-    const itemsPerPage = 100;
+    const itemsPerPage = 20;
 
     useEffect(() => {
         setCurrentPage(1);
