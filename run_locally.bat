@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
@@ -53,18 +54,30 @@ echo Checking Node.js version...  ^|  檢查 Node.js 版本…
 node -v
 for /f "delims=" %%V in ('node -p "process.version"') do set "NODE_FULL=%%V"
 
-if not exist "server\node_modules" (
+:: Reinstall if missing folder OR critical packages (partial/failed install)
+set "NEED_SERVER_INSTALL=0"
+if not exist "server\node_modules" set "NEED_SERVER_INSTALL=1"
+if not exist "server\node_modules\better-sqlite3" set "NEED_SERVER_INSTALL=1"
+if not exist "server\node_modules\node-cron" set "NEED_SERVER_INSTALL=1"
+if "!NEED_SERVER_INSTALL!"=="1" (
     echo Installing server dependencies... ^|  正在安裝後端套件…
-    cd server
+    pushd "%~dp0server"
     call npm install
-    cd ..
+    set "INST=!ERRORLEVEL!"
+    popd
+    if not "!INST!"=="0" (
+        echo.
+        echo [ERROR / 錯誤] server npm install failed. Node 24 needs better-sqlite3 ^>=12, or install VS C++ Build Tools. ^|  後端套件安裝失敗。
+        pause
+        exit /b 1
+    )
 )
 
 if not exist "client\node_modules" (
     echo Installing client dependencies... ^|  正在安裝前端套件…
-    cd client
+    pushd "%~dp0client"
     call npm install
-    cd ..
+    popd
 )
 
 :: Match better-sqlite3 native binary to THIS Node.js
