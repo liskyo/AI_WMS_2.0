@@ -112,7 +112,7 @@ start "WMS Frontend" cmd /k "cd /d ""%~dp0client"" && npm run dev"
 echo.
 echo System starting  ^|  系統啟動說明
 echo Backend ^|  後端埠: http://localhost:3000
-echo Frontend ^| 前端（Vite）：http://localhost:5173  （若為 --host，請以前端視窗實際 URL 為準）
+echo Frontend ^| 前端（Vite）：http://localhost:8080  （若為 --host，請以前端視窗實際 URL 為準）
 echo Note ^|  說明: Vite proxy ECONNREFUSED = backend not listening ^|  若出現代理連線被拒，代表後端未成功啟動，請先看「WMS Backend」視窗（常見為 better-sqlite3 需 rebuild）。
 echo Optionally ^|  另可於專案根目錄：npm install 後執行 npm run dev （單一終端並行）。
 pause
